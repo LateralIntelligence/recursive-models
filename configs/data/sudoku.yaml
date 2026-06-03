@@ -1,0 +1,14 @@
+is_iterable: True 
+train: sudoku-extreme
+valid: sudoku-extreme
+tokenizer_name_or_path: sudoku-extreme
+cache_dir: ./cache
+wrap: False
+streaming: True
+insert_train_eos: False
+insert_valid_eos: False
+
+data_paths: ['data/sudoku-extreme-1k-aug-1000']
+data_paths_test: []
+
+eval_interval: 10_000

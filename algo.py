@@ -1,0 +1,387 @@
+'''
+FLM code: https://github.com/david3684/flm/blob/main/algo.py
+'''
+import os
+import collections
+import copy
+import pickle
+
+import fsspec
+import numpy as np
+import torch
+import torch.nn.functional as F
+import wandb
+import trainer_base
+import utils
+import math
+import models
+from torch.func import functional_call
+from models.dit import modulate_fused
+import functools
+from entmax import entmax_bisect
+
+
+class FLMBase(trainer_base.TrainerBase):
+    """Base class for FLM/FMLM.
+    """
+
+    def __init__(self, config, tokenizer):
+        super().__init__(config, tokenizer)
+        self.t_min = config.algo.t_min
+        self.t_max = config.algo.t_max
+        self.lut_a2g, self.lut_g2a = utils.build_luts(K=self.vocab_size)
+        self._is_resuming = (
+            config.checkpointing.resume_from_ckpt
+            and config.checkpointing.resume_ckpt_path is not None
+            and utils.fsspec_exists(config.checkpointing.resume_ckpt_path)
+        )
+
+    def _validate_configuration(self):
+        pass
+
+    def training_step(self, batch, batch_idx):
+        return super().training_step(batch, batch_idx)
+
+    def _process_sigma(self, sigma):
+        if sigma.ndim == 1:
+            sigma = sigma.unsqueeze(-1)
+        assert sigma.ndim == 2
+        sigma = sigma.mean(-1).squeeze()
+        if sigma.ndim == 0:
+            sigma = sigma.unsqueeze(0)
+        if not self.config.algo.time_conditioning:
+            sigma = torch.zeros_like(sigma)
+        assert sigma.ndim == 1, sigma.shape
+        return sigma
+
+    def _process_model_output(self, model_output, xt, sigma, cap_value = 30.0):
+        del xt, sigma
+        model_output = cap_value * torch.tanh(model_output / cap_value)
+        return model_output.log_softmax(dim=-1)
+
+    def _process_model_input(self, x0, valid_tokens):
+        return x0, None, valid_tokens
+
+    def _loss(self, x0, valid_tokens,
+              current_accumulation_step=None,
+              train_mode=False,
+              xT=None, given_t=None, not_sampling_t=False):
+        """Override to always dispatch to self.loss() for all FLM classes."""
+        (input_tokens, output_tokens,
+         valid_tokens) = self._process_model_input(x0, valid_tokens)
+        # TODO: better naming; for now, valid tokens to be counted in loss are non-conditioning tokens 
+        conditioning_tokens = torch.logical_not(valid_tokens) 
+
+        loss = self.loss(input_tokens, output_tokens, conditioning_tokens, 
+                         current_accumulation_step, train_mode,
+                         xT=xT, given_t=given_t,
+                         not_sampling_t=not_sampling_t)
+        assert loss.ndim == 2
+        if self.ignore_bos:
+            loss[:, 1:] = loss[:, 1:]
+            valid_tokens[:, 1:] = valid_tokens[:, 1:]
+
+        nlls = (loss * valid_tokens).sum()
+        num_tokens = valid_tokens.sum()
+        token_nll = nlls / num_tokens
+        return trainer_base.Loss(loss=token_nll,
+                                 nlls=nlls,
+                                 prior_loss=0.0,
+                                 num_tokens=num_tokens)
+
+    def loss(self, x0, output_tokens,
+             current_accumulation_step=None, train_mode=False,
+             xT=None, given_t=None, not_sampling_t=False):
+        raise NotImplementedError
+
+    def nll(self, input_tokens, output_tokens,
+            current_accumulation_step=None, train_mode=False):
+        raise NotImplementedError
+
+    def _sample_t_interval(self, n, accum_step, t_min=None, t_max=None):
+        if t_min is None:
+            t_min = self.t_min
+        if t_max is None:
+            t_max = self.t_max
+        if accum_step is not None:
+            batch_dim = n
+            n = self.config.loader.global_batch_size
+        _eps_t = torch.rand(n, device=self.device)
+        if self.antithetic_sampling:
+            offset = torch.arange(n, device=self.device) / n
+            _eps_t = (_eps_t / n + offset) % 1
+            perm = torch.randperm(n, device=self.device)
+            _eps_t = _eps_t[perm]
+        t = (t_max - t_min) * _eps_t + t_min
+        if accum_step is not None:
+            t = t.chunk(self.trainer.num_nodes)[self.trainer.node_rank]
+            t = t.chunk(self.trainer.num_devices)[self.trainer.local_rank]
+            t = t.chunk(self.trainer.accumulate_grad_batches)[accum_step]
+            t = t[:batch_dim]
+        return t
+
+    def _tau_to_t(self, tau):
+        """Convert t to reparameterized time tau."""
+        return utils.alpha_to_gamma(tau, self.lut_a2g)
+
+    def _t_to_tau(self, t):
+        """Convert t to reparameterized time tau."""
+        return utils.gamma_to_alpha(t, self.lut_g2a)
+
+    def corrupt_continuous(self, x0, t, conditioning_mask=None):
+        """Corrupt data x0 at time t using linear interpolation with Gaussian noise;
+            if conditioning_mask supplied than keep those clean    
+
+        Params:
+            conditioning_mask: (torch.Tensor) (B,L)
+        """
+        t = t.unsqueeze(-1).unsqueeze(-1)
+        target_data = F.one_hot(x0, self.vocab_size).float()
+        noise = torch.randn_like(target_data, dtype=torch.float32)
+        x_t = (1 - t) * noise + t * target_data
+        if conditioning_mask is not None: # keep conditioning tokens clean
+            x_t = torch.where(conditioning_mask.unsqueeze(-1), target_data, x_t)
+        return x_t, target_data
+
+    def load_state_dict(self, state_dict, strict=True):
+        return super().load_state_dict(state_dict, strict=False)
+
+    def on_load_checkpoint(self, checkpoint):
+        print("Resuming training from checkpoint...")
+        self._is_resuming = True
+        if 'state_dict' in checkpoint:
+            checkpoint['state_dict'] = self._filter_checkpoint_state_dict(
+                checkpoint['state_dict'])
+        if self.config.mode == 'sample_eval':
+            if getattr(self.backbone, 'learnable_loss_weighting', None) is not None:
+                if not any(k.startswith('backbone.learnable_loss_weighting')
+                           for k in checkpoint['state_dict'].keys()):
+                    print("Learnable_loss_weighting not found in checkpoint. "
+                          "Initializing from scratch for eval mode.")
+                    for name, param in self.backbone.learnable_loss_weighting.named_parameters():
+                        param_key = f'backbone.learnable_loss_weighting.{name}'
+                        checkpoint['state_dict'][param_key] = param.data.clone()
+        super().on_load_checkpoint(checkpoint)
+
+    def on_save_checkpoint(self, checkpoint):
+        checkpoint['state_dict'] = collections.OrderedDict(
+            (k, v) for k, v in checkpoint['state_dict'].items()
+            if not k.startswith('teacher'))
+        super().on_save_checkpoint(checkpoint)
+
+    def _filter_checkpoint_state_dict(self, state_dict):
+        """Filter teacher keys and strip _orig_mod from checkpoint state_dict."""
+        new_state_dict = collections.OrderedDict()
+        for k, v in state_dict.items():
+            if k.startswith('teacher'):
+                continue
+            new_key = k.replace('._orig_mod.', '.')
+            new_state_dict[new_key] = v
+        return new_state_dict
+
+    def forward_no_softmax(self, xt, tau, tau_prime=None, **kwargs):
+        tau = self._process_sigma(tau)
+        if tau_prime is not None:
+            tau_prime = self._process_sigma(tau_prime)
+        with torch.amp.autocast(device_type=self.device.type, dtype=torch.float32):
+            model_output = self.backbone(xt, tau, tau_prime, **kwargs)
+        return model_output
+
+    def _extract_ema_state_dict(self, model, checkpoint):
+        """Extract EMA parameters from checkpoint into a state_dict for model."""
+        ema_state = checkpoint.get('ema', None)
+        if not ema_state:
+            print("Warning: No EMA found, using regular state_dict")
+            return {k.replace('backbone.', '').replace('._orig_mod.', ''): v
+                    for k, v in checkpoint['state_dict'].items()
+                    if k.startswith('backbone.')}
+
+        new_sd = collections.OrderedDict()
+        shadow_params = ema_state['shadow_params']
+        param_names = [n for n, p in model.named_parameters()
+                       if p.requires_grad]
+        print(f"EMA shadow_params: {len(shadow_params)}, "
+              f"Model param_names: {len(param_names)}")
+        min_len = min(len(shadow_params), len(param_names))
+        for name, val in zip(param_names[:min_len],
+                             shadow_params[:min_len]):
+            new_sd[name] = val
+        for k, v in checkpoint['state_dict'].items():
+            clean_k = k.replace('backbone.', '').replace('._orig_mod.', '')
+            if (clean_k not in new_sd
+                    and clean_k in [n for n, _ in model.named_parameters()]):
+                new_sd[clean_k] = v
+                print(f"Loaded missing param from state_dict: {clean_k}")
+        if len(shadow_params) != len(param_names):
+            print(f"Warning: EMA param count mismatch. "
+                  f"Loaded {min_len}/{len(param_names)} from EMA, "
+                  f"rest from state_dict")
+        return new_sd
+
+    def _load_teacher_model(self, path, use_plain_config=True):
+        """Load a frozen teacher model from checkpoint.
+
+        Args:
+            path: Path to checkpoint file.
+            use_plain_config: If True, temporarily disable double_temb and
+                learnable_loss_weighting when building the teacher
+                (to match EMA parameter shapes from a base model).
+        """
+        print(f"Loading teacher model from: {path}")
+        if use_plain_config:
+            saved = (self.config.algo.double_temb,
+                     self.config.algo.learnable_loss_weighting)
+            self.config.algo.double_temb = False
+            self.config.algo.learnable_loss_weighting = False
+
+        assert self.config.algo.backbone == 'dit', \
+            "Only DIT backbone supported for teacher model"
+        model = models.dit.DIT(self.config, vocab_size=self.vocab_size)
+
+        if use_plain_config:
+            (self.config.algo.double_temb,
+             self.config.algo.learnable_loss_weighting) = saved
+
+        checkpoint = torch.load(path, map_location='cpu', weights_only=False)
+        state_dict = self._extract_ema_state_dict(model, checkpoint)
+        model.load_state_dict(state_dict, strict=False)
+        model = model.to(self.device).eval()
+        for param in model.parameters():
+            param.requires_grad = False
+        return model
+
+    def _copy_teacher_weights_to_student(self, teacher_dict):
+        """Copy teacher weights to student backbone and zero-init sigma_map_prime."""
+        with torch.no_grad():
+            student_dict = self.backbone.state_dict()
+            for name, param in teacher_dict.items():
+                print(f"Copying parameter: {name}")
+                if name in student_dict:
+                    student_dict[name].copy_(param)
+            if (hasattr(self.backbone, 'sigma_map_prime')
+                    and self.backbone.sigma_map_prime is not None):
+                for name, param in self.backbone.sigma_map_prime.named_parameters():
+                    if 'mlp.2' in name:
+                        param.zero_()
+                        print(f"Zero initialized student sigma_map_prime: {name}")
+
+    @staticmethod
+    def _zero_init_module(module):
+        for m in module.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.zero_()
+                if m.bias is not None:
+                    m.bias.data.zero_()
+
+    @staticmethod
+    def _random_init_module(module, std=0.02):
+        for m in module.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(mean=0.0, std=std)
+                if m.bias is not None:
+                    m.bias.data.zero_()
+
+
+class FLM(FLMBase):
+    def loss(self, x0, output_tokens, conditioning_tokens=None,
+             current_accumulation_step=None, train_mode=False,
+             xT=None, given_t=None, not_sampling_t=False):
+        '''
+        conditioning_tokens: (torch.Tensor) Boolean mask where 1 for tokens which are not
+            corrupted, else 0
+        '''
+        del given_t, not_sampling_t, output_tokens
+        B = x0.shape[0]
+        tau_t = self._sample_t_interval(B, current_accumulation_step,
+                                    t_min=self.t_min, t_max=self.t_max)
+        t = self._tau_to_t(tau_t)
+        assert conditioning_tokens is not None 
+        x_t, target_data = self.corrupt_continuous(x0, t, conditioning_tokens)
+        f = self.forward(x_t, tau_t) #condition on tau_t
+        loss = -(target_data * f).sum(dim=-1)
+        self.log('loss', loss.mean(), prog_bar=True)
+        if self.config.algo.learnable_loss_weighting is True:
+            loss_weight = self.backbone.learnable_loss_weighting(tau_t)
+            loss_weight = loss_weight.unsqueeze(-1)
+            loss = torch.exp(-loss_weight) * loss + loss_weight
+            self.log('loss_weighted', loss.mean(), prog_bar=True)
+        return loss
+
+    @torch.no_grad()
+    def conditional_generate_samples(self, puzzle_solution_input, conditioning_mask, num_steps=None, eps=1e-5):
+        """Conditionally generate samples using Euler ODE solver.
+        
+        Params:
+            puzzle_solution_input: (torch.Tensor) (B,L) sequences where sequence contains both puzzle first half and second half solution
+            conditioning_mask: (torch.Tensor) Boolean where 1 represents conditioning (i.e puzzle) tokens         
+        
+        Returns:
+            predicted solution tokens sequence, including clamped conditioning tokens (B,L) (torch.Tensor) 
+        """
+        if num_steps is None:
+            num_steps = self.config.sampling.steps
+        assert len(puzzle_solution_input.shape) == 2
+        B,L = puzzle_solution_input.shape 
+        V = self.vocab_size
+        device = self.device
+
+        puzzle_solution_onehot = F.one_hot(puzzle_solution_input, num_classes=V)
+
+        tau_vals = torch.linspace(0.0, 1.0, num_steps + 1, device=device)
+        #z = torch.randn((B, L, V), device=device, dtype=self.dtype)
+        z, _ = self.corrupt_continuous(puzzle_solution_input, t=torch.Tensor([0]).to(device), conditioning_mask=conditioning_mask)
+        z = z.to(device).to(self.dtype)
+
+        for i in range(num_steps):
+            tau_t_curr = tau_vals[i]
+            tau_t_next = tau_vals[i + 1]
+            tau_t_in = tau_t_curr.expand(B)
+            t_in = self._tau_to_t(tau_t_in)
+            dt = self._tau_to_t(tau_t_next.expand(B)) - t_in
+            x_1_pred = self.forward(z, tau_t_in)
+            x_1_pred_probs = x_1_pred.exp()
+
+            if i == num_steps - 1:
+                z = x_1_pred_probs
+                # clamp clean conditioning values 
+                z = torch.where(conditioning_mask.unsqueeze(-1), puzzle_solution_onehot, z) 
+                break
+
+            v = (x_1_pred_probs - z) / (1.0 - t_in.view(-1, 1, 1) + eps)
+            z = z + dt.view(-1, 1, 1) * v
+            # clamp clean conditioning values 
+            z = torch.where(conditioning_mask.unsqueeze(-1), puzzle_solution_onehot, z)
+
+        return z.argmax(dim=-1)
+    
+    @torch.no_grad()
+    def generate_samples(self, num_samples, num_steps=None, eps=1e-5):
+        """Generate samples using Euler ODE solver."""
+        if num_steps is None:
+            num_steps = self.config.sampling.steps
+        B = num_samples
+        V = self.vocab_size
+        L = self.num_tokens
+        device = self.device
+
+        tau_vals = torch.linspace(0.0, 1.0, num_steps + 1, device=device)
+        z = torch.randn((num_samples, L, V), device=device, dtype=self.dtype)
+
+        for i in range(num_steps):
+            tau_t_curr = tau_vals[i]
+            tau_t_next = tau_vals[i + 1]
+            tau_t_in = tau_t_curr.expand(B)
+            t_in = self._tau_to_t(tau_t_in)
+            dt = self._tau_to_t(tau_t_next.expand(B)) - t_in
+            x_1_pred = self.forward(z, tau_t_in)
+            x_1_pred_probs = x_1_pred.exp()
+
+            if i == num_steps - 1:
+                z = x_1_pred_probs
+                break
+
+            v = (x_1_pred_probs - z) / (1.0 - t_in.view(-1, 1, 1) + 1e-5)
+            z = z + dt.view(-1, 1, 1) * v
+
+        return z.argmax(dim=-1)
+    
