@@ -73,6 +73,9 @@ class TrainerBase(L.LightningModule):
                 self.config,
                 vocab_size=self.vocab_size,
                 pad_token_id=self.tokenizer.pad_token_id)
+        elif self.config.algo.backbone == 'trm':
+            self.backbone = models.trm.TRM(
+                self.config, vocab_size=self.vocab_size)
         elif self.config.algo.backbone == 'hf_dit':
             self.backbone = transformers.AutoModelForMaskedLM.from_pretrained(
                 config.eval.checkpoint_path, trust_remote_code=True)
@@ -107,7 +110,10 @@ class TrainerBase(L.LightningModule):
 
 
     def _validate_configuration(self):
-        assert self.config.algo.backbone in {'dit', 'hf_dit'}
+        assert self.config.algo.backbone in {'dit', 'hf_dit', 'trm'}
+        if self.config.algo.backbone == 'trm':
+            assert not self.config.algo.causal_attention, \
+                "TRM backbone is bidirectional only"
         if self.config.algo.parameterization == 'ar':
             assert not self.config.algo.time_conditioning
             assert self.config.prior.type == 'none'

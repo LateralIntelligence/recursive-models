@@ -281,7 +281,6 @@ class FLMBase(trainer_base.TrainerBase):
                 if m.bias is not None:
                     m.bias.data.zero_()
 
-
 class FLM(FLMBase):
     def loss(self, x0, output_tokens, conditioning_tokens=None,
              current_accumulation_step=None, train_mode=False,

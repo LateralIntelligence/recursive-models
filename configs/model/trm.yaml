@@ -1,0 +1,19 @@
+name: trm
+type: trm
+hidden_size: 512
+cond_dim: 128          # kept for config compatibility; TRM conditions in hidden_size space
+length: 162
+n_heads: 8             # fallback for trm_num_heads
+scale_by_sigma: True
+dropout: 0.0           # TRM has no dropout; kept for compatibility
+tie_word_embeddings: False
+vocab_lookup: True
+
+# --- TRM-specific ---
+trm_num_heads: 8
+H_cycles: 3
+L_cycles: 6
+L_layers: 2
+expansion: 4.0
+rms_norm_eps: 1e-5
+rope_theta: 10000.0
