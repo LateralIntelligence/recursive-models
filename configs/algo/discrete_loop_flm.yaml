@@ -16,10 +16,12 @@ learnable_loss_weighting: False
 # --- DiscreteLoopFLM-specific ---
 # Fixed number of uniformly-spaced ODE steps in the looped rollout.
 num_timesteps: 12
+backprop_steps: 12
+
 # total_loss = (1 - gamma) * denoiser_loss + gamma * loop_loss
 #   gamma=0 -> plain FLM denoiser objective; gamma=1 -> only looped objective.
 gamma: 0.5
 
 # If True, the denoiser loss samples time uniformly from the discrete grid
 # linspace(0, 1, num_timesteps+1) (matching the loop) instead of continuous t.
-discrete_denoiser_time: False
+discrete_denoiser_time: True 

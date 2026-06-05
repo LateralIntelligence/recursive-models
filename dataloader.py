@@ -39,8 +39,19 @@ import transformers
 from torch.utils.data import IterableDataset, get_worker_info  
 from einops import repeat
 import utils
-from hydra.utils import get_original_cwd
+
 LOGGER = utils.get_logger(__name__)
+
+def original_cwd():
+    """get_original_cwd() when under @hydra.main, else just the real cwd."""
+    try:
+        from hydra.core.hydra_config import HydraConfig
+        from hydra.utils import get_original_cwd
+        if HydraConfig.initialized():
+            return get_original_cwd()
+    except (ImportError, ValueError):
+        pass
+    return os.getcwd()
 
 class SudokuTokenizer(transformers.PreTrainedTokenizer):
     def __init__(self, pad_token='[PAD]', unk_token='[UNK]', **kwargs):
@@ -200,7 +211,7 @@ class PuzzleDataset(IterableDataset):
         self._iters = 0
 
     def _load_metadata(self, dataset_path) -> PuzzleDatasetMetadata:
-        with open(os.path.join(get_original_cwd(), dataset_path, self.split, "dataset.json"), "r") as f:
+        with open(os.path.join(original_cwd(), dataset_path, self.split, "dataset.json"), "r") as f:
             return PuzzleDatasetMetadata(**json.load(f))
 
     def _lazy_load_dataset(self):
@@ -226,7 +237,7 @@ class PuzzleDataset(IterableDataset):
                 else:
                     set_name_ = set_name
                 self._data[set_name_] = {
-                    field_name: np.load(os.path.join(get_original_cwd(), dataset_path, self.split, f"{set_name}__{field_name}.npy"), mmap_mode=mmap_mode)
+                    field_name: np.load(os.path.join(original_cwd(), dataset_path, self.split, f"{set_name}__{field_name}.npy"), mmap_mode=mmap_mode)
                     for field_name, mmap_mode in field_mmap_modes.items()
                 }
                 
@@ -396,6 +407,9 @@ def get_dataset(dataset_name,
         )   
         data = dataset[mode]
         return data 
+    elif dataset_name == "sudoku":
+        dataset = get_sudoku_dataset(config)
+        pass 
     else:
         raise ValueError(f"Only valid dataset name is sudoku-extreme and mnist. Received {dataset_name}")
 

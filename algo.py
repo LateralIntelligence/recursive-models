@@ -408,6 +408,7 @@ class DiscreteLoopFLM(FLM):
     def __init__(self, config, tokenizer):
         super().__init__(config, tokenizer)
         self.num_timesteps = config.algo.num_timesteps
+        self.backprop_steps = config.algo.backprop_steps
         self.gamma = config.algo.gamma
         self.discrete_denoiser_time = config.algo.get('discrete_denoiser_time', False)
 
@@ -445,6 +446,7 @@ class DiscreteLoopFLM(FLM):
         B, L = x0.shape
         device = self.device
         N = self.num_timesteps
+        N_backprop = self.backprop_steps
 
         target_data = F.one_hot(x0, self.vocab_size).float()  # (B, L, V)
 
@@ -473,6 +475,10 @@ class DiscreteLoopFLM(FLM):
             z = z + dt.view(-1, 1, 1) * v
             # Keep conditioning tokens clean at every step.
             z = torch.where(conditioning_tokens.unsqueeze(-1), target_data, z)
+            if k < (N-N_backprop): 
+                #no gradient 
+                z = z.detach()
+
 
         loop_ce = -(target_data * final_log_probs).sum(dim=-1)  # (B, L)
         return loop_ce

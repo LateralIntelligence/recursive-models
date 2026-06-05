@@ -70,6 +70,10 @@ eval:
   generated_samples_path: ${cwd:}/samples.json
   max_batches: 1 #-1
   debug_with_training_set: False 
+  viz_path: null 
+  num_display: 16
+  num_gen_rows: 3
+
 
 optim:
   weight_decay: 0
