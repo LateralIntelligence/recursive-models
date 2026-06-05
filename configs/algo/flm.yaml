@@ -1,7 +1,7 @@
 # for flm pretrain (only fm loss)
 
 name: flm
-backbone: dit  # dit / dimamba / hf_dit
+backbone: dit  # dit / dimamba / hf_dit / trm
 parameterization: mean
 time_conditioning: True
 T: 0  

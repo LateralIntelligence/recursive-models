@@ -1,0 +1,15 @@
+is_iterable: True
+train: mnist
+valid: mnist
+tokenizer_name_or_path: mnist
+cache_dir: ./cache
+wrap: False
+streaming: True
+insert_train_eos: False
+insert_valid_eos: False
+
+# Build with: cd dataset_code && python build_mnist_dataset.py --output-dir data/mnist
+data_paths: ['data/mnist']
+data_paths_test: []
+
+eval_interval: 5_000

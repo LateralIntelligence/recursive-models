@@ -298,12 +298,13 @@ class FLM(FLMBase):
         x_t, target_data = self.corrupt_continuous(x0, t, conditioning_tokens)
         f = self.forward(x_t, tau_t) #condition on tau_t
         loss = -(target_data * f).sum(dim=-1)
-        self.log('loss', loss.mean(), prog_bar=True)
+
+        #self.log('loss', loss.mean(), prog_bar=True)
         if self.config.algo.learnable_loss_weighting is True:
             loss_weight = self.backbone.learnable_loss_weighting(tau_t)
             loss_weight = loss_weight.unsqueeze(-1)
             loss = torch.exp(-loss_weight) * loss + loss_weight
-            self.log('loss_weighted', loss.mean(), prog_bar=True)
+            #self.log('loss_weighted', loss.mean(), prog_bar=True)
         return loss
 
     @torch.no_grad()
@@ -384,3 +385,131 @@ class FLM(FLMBase):
 
         return z.argmax(dim=-1)
     
+class DiscreteLoopFLM(FLM):
+    """FLM variant trained with an additional *looped* (unrolled-ODE) objective.
+
+    On top of the usual per-token denoiser loss (random t, inherited from
+    ``FLM.loss``), this class unrolls a fixed number of uniformly-spaced ODE
+    steps -- the same first-order Euler integrator used at sampling time -- and
+    backpropagates through the whole rollout. The rollout starts from pure noise
+    at t=0, and at every step the model ``f`` predicts E[x_1], from which we form
+    the velocity ``v = (E[x_1] - x_t) / (1 - t)`` and take ``x_t <- x_t + v*dt``,
+    clamping conditioning tokens to their clean values. The final step's logits
+    are scored against the true tokens with a cross-entropy loss.
+
+    The total loss is a linear (convex) combination controlled by ``gamma``:
+
+        total = (1 - gamma) * denoiser_loss + gamma * loop_loss
+
+    so ``gamma=0`` recovers the plain FLM denoiser objective and ``gamma=1`` uses
+    only the looped objective.
+    """
+
+    def __init__(self, config, tokenizer):
+        super().__init__(config, tokenizer)
+        self.num_timesteps = config.algo.num_timesteps
+        self.gamma = config.algo.gamma
+        self.discrete_denoiser_time = config.algo.get('discrete_denoiser_time', False)
+
+    def _sample_t_interval(self, n, accum_step, t_min=None, t_max=None):
+        """Sample the denoiser-loss time.
+
+        Default: continuous random tau (FLMBase behaviour). When
+        ``discrete_denoiser_time`` is set, snap the (antithetic) continuous
+        sample onto the uniform grid ``linspace(0, 1, num_timesteps + 1)`` so the
+        denoiser loss trains on exactly the timesteps used by the looped rollout.
+        """
+        tau = super()._sample_t_interval(n, accum_step, t_min=t_min, t_max=t_max)
+        if not self.discrete_denoiser_time:
+            return tau
+        lo = self.t_min if t_min is None else t_min
+        hi = self.t_max if t_max is None else t_max
+        # Map continuous uniform sample -> uniform index over the N+1 grid points.
+        u = ((tau - lo) / (hi - lo)).clamp(0.0, 1.0)
+        N = self.num_timesteps
+        idx = torch.clamp((u * (N + 1)).long(), 0, N)
+        grid = torch.linspace(0.0, 1.0, N + 1, device=tau.device)
+        return grid[idx]
+
+    def _loop_loss(self, x0, conditioning_tokens, eps=1e-5):
+        """Per-token cross-entropy of the looped-rollout's final prediction.
+
+        Params:
+            x0: (B, L) clean target token ids.
+            conditioning_tokens: (B, L) bool mask, 1 where tokens are kept clean
+                (conditioning / padding), 0 where they must be generated.
+
+        Returns:
+            (B, L) per-token cross-entropy of the final x_1 logits vs. x0.
+        """
+        B, L = x0.shape
+        device = self.device
+        N = self.num_timesteps
+
+        target_data = F.one_hot(x0, self.vocab_size).float()  # (B, L, V)
+
+        # Discrete, uniformly-spaced timesteps (in tau space, matching the
+        # sampler). t is derived from tau exactly as in conditional_generate_samples.
+        tau_vals = torch.linspace(0.0, 1.0, N + 1, device=device)
+
+        # x_t at t=0 is pure noise, with conditioning tokens clamped to clean.
+        t0 = torch.zeros(B, device=device)
+        z, _ = self.corrupt_continuous(x0, t0, conditioning_tokens)  # (B, L, V), float32
+
+        final_log_probs = None
+        for k in range(N):
+            tau_t_in = tau_vals[k].expand(B)
+            t_in = self._tau_to_t(tau_t_in)
+            f = self.forward(z, tau_t_in)  # log-probs over vocab, (B, L, V)
+
+            if k == N - 1:
+                # Final x_1 prediction: score its logits against the true tokens.
+                final_log_probs = f
+                break
+
+            x_1_pred_probs = f.exp()
+            dt = self._tau_to_t(tau_vals[k + 1].expand(B)) - t_in
+            v = (x_1_pred_probs - z) / (1.0 - t_in.view(-1, 1, 1) + eps)
+            z = z + dt.view(-1, 1, 1) * v
+            # Keep conditioning tokens clean at every step.
+            z = torch.where(conditioning_tokens.unsqueeze(-1), target_data, z)
+
+        loop_ce = -(target_data * final_log_probs).sum(dim=-1)  # (B, L)
+        return loop_ce
+
+    def _loss(self, x0, valid_tokens,
+              current_accumulation_step=None,
+              train_mode=False,
+              xT=None, given_t=None, not_sampling_t=False):
+        (input_tokens, _output_tokens,
+         valid_tokens) = self._process_model_input(x0, valid_tokens)
+        # Tokens kept clean (conditioning + padding); the complement is in-loss.
+        conditioning_tokens = torch.logical_not(valid_tokens)
+
+        # 1) Standard denoiser loss at a random t (inherited FLM.loss) -> (B, L).
+        denoiser_pt = self.loss(input_tokens, _output_tokens, conditioning_tokens,
+                                current_accumulation_step, train_mode,
+                                xT=xT, given_t=given_t,
+                                not_sampling_t=not_sampling_t)
+        # 2) Looped-rollout cross-entropy of the final prediction -> (B, L).
+        loop_pt = self._loop_loss(input_tokens, conditioning_tokens)
+
+        assert denoiser_pt.ndim == 2 and loop_pt.ndim == 2
+
+        num_tokens = valid_tokens.sum()
+        denoiser_nll = (denoiser_pt * valid_tokens).sum()
+        loop_nll = (loop_pt * valid_tokens).sum()
+        denoiser_loss = denoiser_nll / num_tokens
+        loop_loss = loop_nll / num_tokens
+
+        total = (1.0 - self.gamma) * denoiser_loss + self.gamma * loop_loss
+
+        self.log('loss_denoiser', denoiser_loss, prog_bar=True)
+        self.log('loss_loop', loop_loss, prog_bar=True)
+        self.log('loss_total', total, prog_bar=True)
+
+        # Report the denoiser NLL for perplexity-style metrics (comparable to FLM).
+        return trainer_base.Loss(loss=total,
+                                 nlls=denoiser_nll,
+                                 prior_loss=0.0,
+                                 num_tokens=num_tokens)

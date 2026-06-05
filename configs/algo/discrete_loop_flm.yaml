@@ -1,0 +1,25 @@
+# DiscreteLoopFLM: denoiser loss + looped (unrolled-ODE) cross-entropy loss.
+
+name: discrete_loop_flm
+backbone: dit  # dit / dimamba / hf_dit / trm
+parameterization: mean
+time_conditioning: True
+T: 0
+subs_masking: False
+causal_attention: False
+ignore_bos: False
+t_max: 1.0
+t_min: 0.0
+double_temb: False
+learnable_loss_weighting: False
+
+# --- DiscreteLoopFLM-specific ---
+# Fixed number of uniformly-spaced ODE steps in the looped rollout.
+num_timesteps: 12
+# total_loss = (1 - gamma) * denoiser_loss + gamma * loop_loss
+#   gamma=0 -> plain FLM denoiser objective; gamma=1 -> only looped objective.
+gamma: 0.5
+
+# If True, the denoiser loss samples time uniformly from the discrete grid
+# linspace(0, 1, num_timesteps+1) (matching the loop) instead of continuous t.
+discrete_denoiser_time: False

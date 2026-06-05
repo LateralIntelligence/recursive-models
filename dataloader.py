@@ -93,8 +93,11 @@ class IdentityTokenizer:
 def get_tokenizer(config):
     if config.data.tokenizer_name_or_path == "sudoku-extreme":
         return IdentityTokenizer(vocab_size=11, pad_token_id=0)
-    else: 
-        raise ValueError("Only data tokenizer name is sudoku-extreme")
+    elif config.data.tokenizer_name_or_path == "mnist":
+        # Pixel space: token 0 = PAD/EMPTY, tokens 1/2 binary
+        return IdentityTokenizer(vocab_size=3, pad_token_id=0)
+    else:
+        raise ValueError("Only data tokenizer names are 'sudoku-extreme' and 'mnist'")
 
 
 #### Dataset code ####
@@ -356,7 +359,7 @@ class PuzzleDataset(IterableDataset):
             yield from self._iter_train()
 
 
-def get_sudoku_dataset(config, rank: int, world_size:int):
+def get_puzzle_dataset(config, rank: int, world_size:int):
     train_epochs_per_iter = config.data.eval_interval if config.data.eval_interval is not None else config.trainer.max_steps
     train_dataset = PuzzleDataset(PuzzleDatasetConfig(
         seed=config.seed,
@@ -387,14 +390,14 @@ def get_dataset(dataset_name,
                 rank,
                 world_size,
                 config=None):
-    if dataset_name == "sudoku-extreme":
-        dataset = get_sudoku_dataset(
+    if dataset_name in ("sudoku-extreme", "mnist"):
+        dataset = get_puzzle_dataset(
             config, rank, world_size 
         )   
         data = dataset[mode]
         return data 
     else:
-        raise ValueError(f"Only valid dataset name is sudoku-extreme. Received {dataset_name}")
+        raise ValueError(f"Only valid dataset name is sudoku-extreme and mnist. Received {dataset_name}")
 
 
 def get_dataloaders(config, tokenizer, rank:int, world_size:int, skip_train=False, skip_valid=False, valid_seed=None):

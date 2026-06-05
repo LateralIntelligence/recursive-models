@@ -331,7 +331,7 @@ class TrainerBase(L.LightningModule):
                             )
         self.metrics.update_train(losses.nlls, losses.prior_loss,
                                   losses.num_tokens)
-        self.log(name='trainer/loss',
+        self.log(name='training/loss',
                  value=losses.loss.item(),
                  on_step=True,
                  on_epoch=False,
@@ -368,6 +368,11 @@ class TrainerBase(L.LightningModule):
                             )
         self.metrics.update_valid(losses.nlls, losses.prior_loss,
                                   losses.num_tokens)
+        self.log(name='validation/loss',
+                 value=losses.loss.item(),
+                 on_step=False,
+                 on_epoch=True,
+                 sync_dist=True)
         return losses.loss
 
     def on_validation_epoch_end(self):

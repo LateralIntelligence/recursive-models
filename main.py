@@ -187,8 +187,13 @@ def _generate_samples(diffusion_model, config, tokenizer, logger):
             B, S = input_ids.shape
             assert S % 2 == 0, "expected [puzzle | solution] layout with aligned halves"
             half = S // 2
-            blank = (input_ids[:, :half] == 1)                  # (B, half): unprovided cells
-            given_hints = (input_ids[:, :half] > 1)    
+            if config.data.valid == "mnist":
+                unprovided_id = 0 
+            else:
+                unprovided_id = 1
+
+            blank = (input_ids[:, :half] == unprovided_id)                  # (B, half): unprovided cells
+            given_hints = (input_ids[:, :half] > unprovided_id)    
             solution_hints = torch.zeros_like(gen_mask)
             solution_hints[:, half:] = given_hints
             solution_hints &= gen_mask 
@@ -211,11 +216,12 @@ def _generate_samples(diffusion_model, config, tokenizer, logger):
 
             total_batches += 1
 
+    prefix = config.data.valid
     metrics = {
-        'sudoku/to_predict_exact_match': n_solved / max(n_total, 1),
-        'sudoku/to_predict_cell_acc':    to_predict_cells_ok / max(to_predict_cells_total, 1),
-        'sudoku/given_cells_solution_acc': solution_hints_cells_ok / max(solution_hints_cells_total, 1),
-        'sudoku/n':           n_total,
+        f'{prefix}/to_predict_exact_match': n_solved / max(n_total, 1),
+        f'{prefix}/to_predict_cell_acc':    to_predict_cells_ok / max(to_predict_cells_total, 1),
+        f'{prefix}/given_cells_solution_acc': solution_hints_cells_ok / max(solution_hints_cells_total, 1),
+        f'{prefix}/n':           n_total,
     }
     logger.info(metrics)
     return metrics
@@ -236,6 +242,8 @@ def main(config):
     tokenizer = dataloader.get_tokenizer(config)
     if config.algo.name == "flm":
         diffusion_model = algo.FLM 
+    elif config.algo.name == "discrete_loop_flm":
+        diffusion_model = algo.DiscreteLoopFLM
     else:
         raise ValueError(f"Given incorrect algo {config.algo.name}")
 
