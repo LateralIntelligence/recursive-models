@@ -102,7 +102,7 @@ class IdentityTokenizer:
 
 
 def get_tokenizer(config):
-    if config.data.tokenizer_name_or_path == "sudoku-extreme":
+    if config.data.tokenizer_name_or_path in ("sudoku-extreme", "sudoku"):
         return IdentityTokenizer(vocab_size=11, pad_token_id=0)
     elif config.data.tokenizer_name_or_path == "mnist":
         # Pixel space: token 0 = PAD/EMPTY, tokens 1/2 binary
@@ -396,6 +396,144 @@ def get_puzzle_dataset(config, rank: int, world_size:int):
         'test': test_dataset
     }
 
+class SudokuGeneratedDataset(torch.utils.data.Dataset):
+    """Map-style dataset over generated sudoku examples.
+
+    Each item is a flat [puzzle(81) | solution(81)] sequence with a
+    matching valid_tokens mask (0 over the puzzle/conditioning half,
+    1 over the solution half). This mirrors the {input_ids, valid_tokens}
+    contract produced by PuzzleDataset._collate_batch, so the trainer is
+    agnostic to which sudoku source it consumes.
+    """
+    def __init__(self, data):
+        self.input_ids = data["input_ids"]
+        self.valid_tokens = data["valid_tokens"]
+
+    def __len__(self):
+        return len(self.input_ids)
+
+    def __getitem__(self, idx):
+        return {
+            "input_ids": torch.tensor(self.input_ids[idx], dtype=torch.long),
+            "valid_tokens": torch.tensor(self.valid_tokens[idx], dtype=torch.long),
+        }
+    
+# Cache generated splits so the train and (separate) valid calls reuse the
+# same deterministic, deduplicated generation instead of regenerating.
+_SUDOKU_SPLIT_CACHE: Dict[tuple, dict] = {}
+_SUDOKU_SPLITS = ("train", "validation")
+
+def _sudoku_cache_dir(config):
+    """Deterministic on-disk location for a given generation config.
+
+    Anchored to original_cwd() (not the hydra run dir) so the cache is shared
+    across runs, and keyed by the params that affect generation so changing
+    any of them produces a fresh dataset.
+    """
+    data_cfg = config.data
+    base = getattr(data_cfg, "gen_output_dir", "data/sudoku-gen")
+    name = (f"{data_cfg.difficulty}"
+            f"_train{data_cfg.num_train}"
+            f"_valid{data_cfg.num_valid}"
+            f"_seed{config.seed}")
+    return os.path.join(original_cwd(), base, name)
+
+
+def _load_sudoku_from_disk(cache_dir):
+    splits = {}
+    for split in _SUDOKU_SPLITS:
+        splits[split] = {
+            "input_ids": np.load(os.path.join(cache_dir, f"{split}__input_ids.npy")),
+            "valid_tokens": np.load(os.path.join(cache_dir, f"{split}__valid_tokens.npy")),
+        }
+    return splits
+
+
+def _disk_cache_complete(cache_dir):
+    return all(
+        os.path.exists(os.path.join(cache_dir, f"{split}__{field}.npy"))
+        for split in _SUDOKU_SPLITS
+        for field in ("input_ids", "valid_tokens"))
+
+
+def _save_sudoku_to_disk(cache_dir, splits, config):
+    # Write to a temp dir then atomically rename, so concurrent ranks never
+    # observe a half-written cache (generation is deterministic, so a losing
+    # writer's identical result is simply discarded).
+    parent = os.path.dirname(cache_dir) or "."
+    os.makedirs(parent, exist_ok=True)
+    tmp_dir = f"{cache_dir}.tmp.{os.getpid()}"
+    os.makedirs(tmp_dir, exist_ok=True)
+    try:
+        for split in _SUDOKU_SPLITS:
+            # Values are 0..10 and the mask is 0/1, so uint8 is plenty.
+            np.save(os.path.join(tmp_dir, f"{split}__input_ids.npy"),
+                    np.asarray(splits[split]["input_ids"], dtype=np.uint8))
+            np.save(os.path.join(tmp_dir, f"{split}__valid_tokens.npy"),
+                    np.asarray(splits[split]["valid_tokens"], dtype=np.uint8))
+        with open(os.path.join(tmp_dir, "meta.json"), "w") as f:
+            json.dump({
+                "num_train": config.data.num_train,
+                "num_valid": config.data.num_valid,
+                "difficulty": config.data.difficulty,
+                "seed": config.seed,
+            }, f)
+        os.replace(tmp_dir, cache_dir)
+    finally:
+        if os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+def _build_sudoku_splits(config):
+    from dataset_code.generate_sudoku_dataset import generate_sudoku_dataset
+
+    data_cfg = config.data
+    num_train = data_cfg.num_train
+    num_valid = data_cfg.num_valid
+    difficulty = data_cfg.difficulty
+    num_workers = getattr(data_cfg, "gen_num_workers", 1)
+    key = (num_train, num_valid, difficulty, config.seed, num_workers)
+    if key in _SUDOKU_SPLIT_CACHE:
+        return _SUDOKU_SPLIT_CACHE[key]
+
+    cache_dir = _sudoku_cache_dir(config)
+    if _disk_cache_complete(cache_dir):
+        LOGGER.info("Loading cached sudoku dataset from %s", cache_dir)
+        splits = _load_sudoku_from_disk(cache_dir)
+    else:
+        LOGGER.info(
+            "Generating sudoku dataset (train=%d, valid=%d, difficulty=%s, "
+            "seed=%d) -> caching to %s",
+            num_train, num_valid, difficulty, config.seed, cache_dir)
+        splits = generate_sudoku_dataset(
+            num_train=num_train,
+            num_valid=num_valid,
+            difficulty=difficulty,
+            seed=config.seed,
+            num_workers=num_workers,
+        )
+        _save_sudoku_to_disk(cache_dir, splits, config)
+
+    _SUDOKU_SPLIT_CACHE[key] = splits
+    return splits
+
+
+def get_sudoku_dataset(config, mode, rank=0, world_size=1):
+    """Return a map-style generated-sudoku split.
+
+    Deliberately kept separate from get_puzzle_dataset: that path streams
+    pre-built .npy shards via index machinery, whereas this one generates
+    examples in-memory. Both expose the same {input_ids, valid_tokens}
+    batch fields downstream.
+    """
+    splits = _build_sudoku_splits(config)
+    split = "train" if mode == "train" else "validation"
+    dataset = SudokuGeneratedDataset(splits[split])
+    if world_size > 1:
+        # Shard across ranks (no DistributedSampler is configured upstream).
+        dataset = torch.utils.data.Subset(
+            dataset, list(range(rank, len(dataset), world_size)))
+    return dataset
+
 def get_dataset(dataset_name, 
                 mode,
                 rank,
@@ -408,8 +546,7 @@ def get_dataset(dataset_name,
         data = dataset[mode]
         return data 
     elif dataset_name == "sudoku":
-        dataset = get_sudoku_dataset(config)
-        pass 
+        return get_sudoku_dataset(config, mode, rank, world_size)
     else:
         raise ValueError(f"Only valid dataset name is sudoku-extreme and mnist. Received {dataset_name}")
 
@@ -489,3 +626,107 @@ def get_dataloaders(config, tokenizer, rank:int, world_size:int, skip_train=Fals
         valid_loader.tokenizer = tokenizer
 
     return train_loader, valid_loader 
+
+# Samplers adapted from: https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/fault_tolerant_sampler.py
+class RandomFaultTolerantSampler(torch.utils.data.RandomSampler):
+
+    def __init__(self, *args, generator=None, **kwargs):
+        # TD [2022-07-17]: We don't force the seed to be zero. We generate random seed,
+        # which should be reproducible if pl.seed_everything was called beforehand.
+        # This means that changing the seed of the experiment will also change the
+        # sampling order.
+        if generator is None:
+            seed = int(torch.empty((), dtype=torch.int64).random_().item())
+            generator = torch.Generator().manual_seed(seed)
+        kwargs.pop('shuffle', None)
+        super().__init__(*args, generator=generator, **kwargs)
+        self.counter = 0
+        self.restarting = False
+
+    def state_dict(self):
+        return {'random_state': self.generator.get_state(),
+                'counter': self.counter}
+
+    def load_state_dict(self, state_dict):
+        self.generator.set_state(state_dict.get('random_state'))
+        self.counter = state_dict['counter']
+        # self.start_counter = self.counter
+        self.restarting = True
+
+    # TD [2022-08-28] Setting the len will cause PL to think there are only a few batches left per
+    # epoch, and subsequent epoch will have very few batches.
+
+    def __iter__(self) -> typing.Iterator[int]:
+        n = len(self.data_source)
+
+        self.state = self.generator.get_state()
+        indices = torch.randperm(n, generator=self.generator).tolist()
+
+        if not self.restarting:
+            self.counter = 0
+        else:
+            indices = indices[self.counter:]
+            self.restarting = False
+
+        for index in indices:
+            self.counter += 1
+            yield index
+
+        self.counter = 0
+
+
+class FaultTolerantDistributedSampler(torch.utils.data.DistributedSampler):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.counter = 0
+        self.restarting = False
+
+    def state_dict(self):
+        return {'epoch': self.epoch, 'counter': self.counter}
+
+    def load_state_dict(self, state_dict):
+        self.epoch = state_dict['epoch']
+        self.counter = state_dict['counter']
+        self.restarting = True
+
+    # TD [2022-08-28] Setting the len will cause PL to think there are only a few batches left per
+    # epoch, and subsequent epoch will have very few batches.
+    def __iter__(self):
+        if self.shuffle:
+            # deterministically shuffle based on epoch and seed
+            g = torch.Generator()
+            g.manual_seed(self.seed + self.epoch)
+            # type: ignore[arg-type]
+            indices = torch.randperm(len(self.dataset), generator=g).tolist()
+        else:
+            indices = list(range(len(self.dataset)))  # type: ignore[arg-type]
+
+        if not self.drop_last:
+            # add extra samples to make it evenly divisible
+            padding_size = self.total_size - len(indices)
+            if padding_size <= len(indices):
+                indices += indices[:padding_size]
+            else:
+                indices += (indices * math.ceil(
+                    padding_size / len(indices)))[:padding_size]
+        else:
+            # remove tail of data to make it evenly divisible.
+            indices = indices[:self.total_size]
+        assert len(indices) == self.total_size
+
+        # subsample
+        indices = indices[self.rank:self.total_size:self.num_replicas]
+        assert len(indices) == self.num_samples
+
+        if not self.restarting:
+            self.counter = 0
+        else:
+            indices = indices[self.counter:]
+            self.restarting = False
+
+        for index in indices:
+            self.counter += 1
+            yield index
+
+        self.counter = 0
