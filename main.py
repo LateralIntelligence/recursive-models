@@ -226,6 +226,125 @@ def _generate_samples(diffusion_model, config, tokenizer, logger):
     logger.info(metrics)
     return metrics
 
+def _resolve_against_original_cwd(path):
+    """Resolve a relative path against the launch cwd, not hydra's run dir.
+
+    hydra runs with chdir=True, so the process cwd becomes a fresh timestamped
+    run dir. Relative CLI paths (e.g. eval.checkpoint_path) are meant to be
+    relative to where the user invoked `python main.py`, which is what
+    dataloader.original_cwd() returns under @hydra.main.
+    """
+    if not path or os.path.isabs(path):
+        return path
+    return os.path.join(dataloader.original_cwd(), path)
+
+
+def _resolve_sudoku_output_dir(config, ckpt):
+    """Where to drop per-run sudoku eval records.
+
+    `ckpt` is the already-resolved absolute checkpoint path. Always namespaced
+    by the checkpoint's filename stem so evaluating several checkpoints from the
+    same run doesn't overwrite a shared results.json. Prefer an explicit
+    override; otherwise sit next to the evaluated checkpoint
+    (``<run>/checkpoints/x.ckpt`` -> ``<run>/sudoku_eval/x``); finally fall back
+    to the current run's save_dir.
+    """
+    stem = os.path.splitext(os.path.basename(ckpt))[0] if ckpt else 'eval'
+    override = config.eval.get('sudoku_output_dir', None)
+    if override:
+        return os.path.join(_resolve_against_original_cwd(override), stem)
+    if ckpt:
+        run_dir = os.path.dirname(os.path.dirname(ckpt))
+        return os.path.join(run_dir, 'sudoku_eval', stem)
+    return os.path.join(config.checkpointing.save_dir, 'sudoku_eval', stem)
+
+
+@L.pytorch.utilities.rank_zero_only
+@torch.no_grad()
+def _sudoku_eval(diffusion_model, config, tokenizer, logger):
+    """Generate solutions for the sudoku validation set and save per-run records.
+
+    Records (generated vs. ground-truth solution, per-puzzle correctness) and
+    the aggregate accuracy are written to ``results.json`` under the run's
+    output dir, alongside the checkpoints.
+    NOTE: Uses the model ckpt saved config to determine samping steps! 
+    """
+    logger.info('Starting Sudoku eval.')
+    _, eval_dl = dataloader.get_dataloaders(
+        config, tokenizer, rank=0, world_size=1, skip_train=True)
+
+    assert config.eval.checkpoint_path, \
+        'config.eval.checkpoint_path must be set for sudoku_eval'
+    # Resolve relative to the launch cwd, since hydra has chdir'd us into a new
+    # run dir and a relative ckpt path would otherwise be looked up there.
+    ckpt_path = _resolve_against_original_cwd(config.eval.checkpoint_path)
+
+    model = diffusion_model.load_from_checkpoint(
+        ckpt_path,
+        tokenizer=tokenizer,
+        weights_only=False).to('cuda')
+    model._eval_mode()  # applies EMA weights unless config.eval.disable_ema
+
+    output_dir = _resolve_sudoku_output_dir(config, ckpt_path)
+    os.makedirs(output_dir, exist_ok=True)
+
+    records = []
+    num_correct = total = total_batches = 0
+    with torch.inference_mode():
+        for batch in tqdm(eval_dl, desc='Sudoku eval'):
+            if (config.eval.sudoku_max_batches > 0
+                    and total_batches >= config.eval.sudoku_max_batches):
+                break
+            input_ids = batch['input_ids'].cuda()
+            valid_tokens = batch['valid_tokens'].cuda().bool()  # 1 over solution
+            real_rows = valid_tokens.any(dim=-1)                # drop padded rows
+            conditioning_mask = torch.logical_not(valid_tokens)
+            full_seq_pred = model.conditional_generate_samples(
+                input_ids, conditioning_mask, num_steps=model.config.algo.num_timesteps)
+
+            B, S = input_ids.shape
+            assert S % 2 == 0, 'expected [puzzle | solution] layout'
+            half = S // 2
+            gt = input_ids[:, half:]
+            generated = full_seq_pred[:, half:]
+            correct = (generated == gt).all(dim=1)
+
+            for i in range(B):
+                if not real_rows[i]:
+                    continue
+                is_correct = bool(correct[i].item())
+                records.append({
+                    'generated': tokenizer.decode(generated[i].cpu()),
+                    'ground_truth': tokenizer.decode(gt[i].cpu()),
+                    'correct': is_correct,
+                })
+                num_correct += int(is_correct)
+                total += 1
+            total_batches += 1
+
+    accuracy = num_correct / max(total, 1)
+    logger.info(
+        f'Sudoku accuracy: {num_correct}/{total} ({accuracy * 100:.2f}%)')
+    results = {
+        'accuracy': accuracy,
+        'num_correct': num_correct,
+        'num_total': total,
+        'checkpoint_path': config.eval.checkpoint_path,
+        'records': records,
+    }
+    results_path = os.path.join(output_dir, 'results.json')
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    logger.info(f'Sudoku eval results saved to {results_path}')
+
+    if wandb.run is not None:
+        wandb.log({
+            'sudoku/accuracy': accuracy,
+            'sudoku/num_correct': num_correct,
+            'sudoku/num_total': total,
+        })
+    return results
+
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
 def main(config):
@@ -254,6 +373,8 @@ def main(config):
     
     if config.mode == 'sample_eval':
         _generate_samples(**kwargs)
+    elif config.mode == "sudoku_eval":
+        _sudoku_eval(**kwargs)
     else:
         _train(**kwargs, rank=RANK, world_size=WORLD_SIZE)
 

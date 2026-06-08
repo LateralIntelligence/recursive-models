@@ -403,6 +403,8 @@ class DiscreteLoopFLM(FLM):
 
     so ``gamma=0`` recovers the plain FLM denoiser objective and ``gamma=1`` uses
     only the looped objective.
+
+    NOTE: This is not how looped transformers implement the loss. This only BPTT from the final output. 
     """
 
     def __init__(self, config, tokenizer):
@@ -492,30 +494,34 @@ class DiscreteLoopFLM(FLM):
         # Tokens kept clean (conditioning + padding); the complement is in-loss.
         conditioning_tokens = torch.logical_not(valid_tokens)
 
-        # 1) Standard denoiser loss at a random t (inherited FLM.loss) -> (B, L).
-        denoiser_pt = self.loss(input_tokens, _output_tokens, conditioning_tokens,
-                                current_accumulation_step, train_mode,
-                                xT=xT, given_t=given_t,
-                                not_sampling_t=not_sampling_t)
-        # 2) Looped-rollout cross-entropy of the final prediction -> (B, L).
-        loop_pt = self._loop_loss(input_tokens, conditioning_tokens)
-
-        assert denoiser_pt.ndim == 2 and loop_pt.ndim == 2
-
+        total_loss = 0
         num_tokens = valid_tokens.sum()
-        denoiser_nll = (denoiser_pt * valid_tokens).sum()
-        loop_nll = (loop_pt * valid_tokens).sum()
-        denoiser_loss = denoiser_nll / num_tokens
-        loop_loss = loop_nll / num_tokens
+        if self.gamma < 1:
+            # 1) Standard denoiser loss at a random t (inherited FLM.loss) -> (B, L).
+            denoiser_pt = self.loss(input_tokens, _output_tokens, conditioning_tokens,
+                                    current_accumulation_step, train_mode,
+                                    xT=xT, given_t=given_t,
+                                    not_sampling_t=not_sampling_t)
+            denoiser_nll = (denoiser_pt * valid_tokens).sum()
+            denoiser_loss = denoiser_nll / num_tokens
+            total_loss += (1.0 - self.gamma)*denoiser_loss
+            assert denoiser_pt.ndim == 2
+            self.log('loss_denoiser', denoiser_loss, prog_bar=True)
+            
+        if self.gamma > 0:
+            # 2) Looped-rollout cross-entropy of the final prediction -> (B, L).
+            loop_pt = self._loop_loss(input_tokens, conditioning_tokens)
+            loop_nll = (loop_pt * valid_tokens).sum()
+            loop_loss = loop_nll / num_tokens
+            total_loss += self.gamma*loop_loss 
+            assert loop_pt.ndim == 2
+            self.log('loss_loop', loop_loss, prog_bar=True)
 
-        total = (1.0 - self.gamma) * denoiser_loss + self.gamma * loop_loss
-
-        self.log('loss_denoiser', denoiser_loss, prog_bar=True)
-        self.log('loss_loop', loop_loss, prog_bar=True)
-        self.log('loss_total', total, prog_bar=True)
+       
+        self.log('loss_total', total_loss, prog_bar=True)
 
         # Report the denoiser NLL for perplexity-style metrics (comparable to FLM).
-        return trainer_base.Loss(loss=total,
-                                 nlls=denoiser_nll,
+        return trainer_base.Loss(loss=total_loss,
+                                 nlls=denoiser_nll if self.gamma < 1 else loop_nll,
                                  prior_loss=0.0,
                                  num_tokens=num_tokens)

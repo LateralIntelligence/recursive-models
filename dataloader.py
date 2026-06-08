@@ -99,6 +99,11 @@ class IdentityTokenizer:
         if torch.is_tensor(samples):
             samples = samples.tolist()
         return [' '.join(map(str, row)) for row in samples]
+    
+    def decode(self, sample): #convert sequence to string
+        if torch.is_tensor(sample):
+            sample = sample.tolist()
+        return ''.join(str(c) for c in sample)
 
 
 def get_tokenizer(config):

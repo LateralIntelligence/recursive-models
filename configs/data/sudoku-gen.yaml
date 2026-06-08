@@ -1,5 +1,4 @@
-# Procedurally generated sudoku (in-memory), as opposed to the on-disk
-# `sudoku-extreme` shards. Select with `data=sudoku-gen` on the CLI.
+# Select with `data=sudoku-gen` on the CLI.
 # Layout per example: [ puzzle(81) | solution(81) ] -> length 162
 # (matches model.small length). No BOS / row-separator tokens.
 is_iterable: False
@@ -20,6 +19,6 @@ eval_interval: 10_000
 # Generation parameters (consumed by dataloader.get_sudoku_dataset).
 num_train: 48000
 num_valid: 2000
-difficulty: easy   # easy / medium / hard
-gen_num_workers: 1
+difficulty: hard   # easy / medium / hard
+gen_num_workers: 16
 gen_output_dir: data/sudoku-gen

@@ -9,7 +9,7 @@ defaults:
   - /prior: none
   - /algo: flm
 
-mode: train  # train / ppl_eval / sample_eval
+mode: train  # train / sample_eval / sudoku_eval
 
 # di4c configs:
 is_di4c: False
@@ -73,6 +73,10 @@ eval:
   viz_path: null 
   num_display: 16
   num_gen_rows: 3
+  # Sudoku eval (mode=sudoku_eval): where to write results.json. null -> sit
+  # next to the evaluated checkpoint's run dir. -1 batches = use full valid set.
+  sudoku_output_dir: null
+  sudoku_max_batches: -1
 
 
 optim:
@@ -97,6 +101,7 @@ trainer:
   limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
   limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
   val_check_interval: 2000
+  check_val_every_n_epoch: none 
 
 wandb:
   project: flm
