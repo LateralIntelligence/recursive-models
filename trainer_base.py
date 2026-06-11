@@ -354,6 +354,75 @@ class TrainerBase(L.LightningModule):
         # `on_validation_epoch_end`, which is called whenever validation runs.
         return
 
+    def _is_sudoku_dataset(self):
+        """True when the active (validation) dataset is a sudoku variant.
+
+        Covers ``sudoku``, ``sudoku-gen``, ``sudoku-extreme``, etc. - anything
+        with ``sudoku`` in the configured dataset name.
+        """
+        name = str(getattr(self.config.data, 'valid', '') or '')
+        return 'sudoku' in name.lower()
+
+    @torch.no_grad()
+    def _sudoku_eval(self, use_val=True):
+        """Exact-match solution accuracy on the sudoku validation/training set.
+
+        Runs the model's conditional ODE sampler on each validation/training batch
+        (puzzle tokens held fixed, solution tokens generated) and counts how
+        many puzzles are solved exactly. Assumes the model is already in eval
+        mode (set in ``on_validation_epoch_start``) and mirrors the standalone
+        ``mode=sudoku_eval`` path in ``main.py``.
+
+        Returns the aggregate accuracy (a float), or ``None`` if the model has
+        no conditional sampler.
+        """
+        if not hasattr(self, 'conditional_generate_samples'):
+            return None
+
+        # discrete_loop_flm fixes the rollout grid via algo.num_timesteps;
+        # plain flm has no such field, so fall back to the sampling steps.
+        num_steps = self.config.algo.get('num_timesteps', None)
+        if num_steps is None:
+            num_steps = self.config.sampling.steps
+        max_batches = self.config.eval.get('sudoku_max_batches', -1)
+        if use_val:
+            dls = self.trainer.val_dataloaders
+        else:
+            dls = self.trainer.train_dataloader
+        if isinstance(dls, (list, tuple)):
+            dls = dls[0]
+
+        num_correct = total = num_batches = 0
+        for batch in dls:
+            if max_batches is not None and max_batches > 0 \
+                    and num_batches >= max_batches:
+                break
+            input_ids = batch['input_ids'].to(self.device)
+            valid_tokens = batch['valid_tokens'].to(self.device).bool()  # 1 over solution
+            real_rows = valid_tokens.any(dim=-1)                         # drop padded rows
+            conditioning_mask = torch.logical_not(valid_tokens)
+            full_seq_pred = self.conditional_generate_samples(
+                input_ids, conditioning_mask, num_steps=num_steps)
+
+            B, S = input_ids.shape
+            assert S % 2 == 0, 'expected [puzzle | solution] layout'
+            half = S // 2
+            gt = input_ids[:, half:]
+            generated = full_seq_pred[:, half:]
+            correct = (generated == gt).all(dim=1)
+
+            num_correct += int((correct & real_rows).sum().item())
+            total += int(real_rows.sum().item())
+            num_batches += 1
+
+        # Aggregate counts (not per-rank accuracies) across GPUs.
+        counts = torch.tensor([num_correct, total],
+                              device=self.device, dtype=torch.float64)
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(counts, op=dist.ReduceOp.SUM)
+        num_correct, total = counts[0].item(), counts[1].item()
+        return num_correct / max(total, 1.0)
+    
     def on_validation_epoch_start(self):
         self.metrics.reset()
         self._eval_mode()
@@ -379,6 +448,17 @@ class TrainerBase(L.LightningModule):
         for k, v in self.metrics.valid_nlls.items():
             self.log(name=k,  value=v.compute(), on_step=False,
                      on_epoch=True, sync_dist=True)
+        if (self._is_sudoku_dataset()
+                and not self.trainer.sanity_checking):
+            val_accuracy = self._sudoku_eval(use_val=True)
+            train_accuracy = self._sudoku_eval(use_val=False)
+            if val_accuracy is not None:
+                self.log(name='val/sudoku_accuracy', value=val_accuracy,
+                         on_step=False, on_epoch=True, sync_dist=False)
+            if train_accuracy is not None:
+                self.log(name='train/sudoku_accuracy', value=train_accuracy,
+                         on_step=False, on_epoch=True, sync_dist=False)
+        
         if ((self.config.eval.compute_perplexity_on_sanity
              or not self.trainer.sanity_checking)
                 and self.config.eval.generate_samples):

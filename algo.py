@@ -294,7 +294,7 @@ class FLM(FLMBase):
         tau_t = self._sample_t_interval(B, current_accumulation_step,
                                     t_min=self.t_min, t_max=self.t_max)
         t = self._tau_to_t(tau_t)
-        assert conditioning_tokens is not None 
+ 
         x_t, target_data = self.corrupt_continuous(x0, t, conditioning_tokens)
         f = self.forward(x_t, tau_t) #condition on tau_t
         loss = -(target_data * f).sum(dim=-1)
@@ -385,6 +385,104 @@ class FLM(FLMBase):
 
         return z.argmax(dim=-1)
     
+class DiscreteRecurrentFLM(FLM):
+    """FLM trained with a looped (unrolled-ODE) objective.
+    We consider fixed uniformly spaced timesteps; and unrolls using the first 
+    order Euler approximation during inference. At each step the model predicts 
+    E[x_1], which we add to a total cross entropy objective. Moreover we can define  
+    the velocity ``v = (E[x_1] - x_t) / (1 - t)`` and take ``x_t <- x_t + v*dt``,
+    clamping conditioning tokens to their clean values. We also include the final step's logits
+    to be scored against the true tokens with a cross-entropy loss.
+    """
+
+    def __init__(self, config, tokenizer):
+        super().__init__(config, tokenizer)
+        self.num_timesteps = config.algo.num_timesteps
+        self.backprop_steps = config.algo.backprop_steps
+        self.discrete_denoiser_time = config.algo.get('discrete_denoiser_time', False)
+        assert self.discrete_denoiser_time, "Current algo can only take fixed discrete timesteps"
+
+    def _loop_loss(self, x0, conditioning_tokens, eps=1e-5):
+        """Per-token cross-entropy of the looped-rollout's final prediction.
+
+        Params:
+            x0: (B, L) clean target token ids.
+            conditioning_tokens: (B, L) bool mask, 1 where tokens are kept clean
+                (conditioning / padding), 0 where they must be generated.
+
+        Returns:
+            (B, L) per-token cross-entropy of the final x_1 logits vs. x0.
+        """
+        B, L = x0.shape
+        device = self.device
+        N = self.num_timesteps
+        N_backprop = self.backprop_steps
+        assert N_backprop >= 1
+
+        target_data = F.one_hot(x0, self.vocab_size).float()  # (B, L, V)
+
+        # Discrete, uniformly-spaced timesteps (in tau space, matching the
+        # sampler). t is derived from tau exactly as in conditional_generate_samples.
+        tau_vals = torch.linspace(0.0, 1.0, N + 1, device=device)
+
+        # x_t at t=0 is pure noise, with conditioning tokens clamped to clean.
+        t0 = torch.zeros(B, device=device)
+        z, _ = self.corrupt_continuous(x0, t0, conditioning_tokens)  # (B, L, V), float32
+
+        final_log_probs = None
+        sum_loss_across_time = 0.0 
+        for k in range(N):
+            tau_t_in = tau_vals[k].expand(B)
+            t_in = self._tau_to_t(tau_t_in)
+            f = self.forward(z, tau_t_in)  # log-probs over vocab, (B, L, V)
+            loss = -(target_data * f).sum(dim=-1)
+            if k >= (N-N_backprop): #only have gradient calculation for last N_backprop
+                sum_loss_across_time += loss
+
+            if k == N - 1:
+                # Final x_1 prediction: score its logits against the true tokens.
+                final_log_probs = f
+                break
+
+            x_1_pred_probs = f.exp()
+            dt = self._tau_to_t(tau_vals[k + 1].expand(B)) - t_in
+            v = (x_1_pred_probs - z) / (1.0 - t_in.view(-1, 1, 1) + eps)
+            z = z + dt.view(-1, 1, 1) * v
+            # Keep conditioning tokens clean at every step.
+            z = torch.where(conditioning_tokens.unsqueeze(-1), target_data, z)
+            if k < (N-N_backprop): 
+                #no gradient passing through the first layers not included in last N_backprop
+                # (TODO: you can ablate this) 
+                z = z.detach()
+
+
+        final_loop_ce = -(target_data * final_log_probs).sum(dim=-1)  # (B, L)
+        return sum_loss_across_time, final_loop_ce
+
+    def _loss(self, x0, valid_tokens,
+              current_accumulation_step=None,
+              train_mode=False,
+              xT=None, given_t=None, not_sampling_t=False):
+        (input_tokens, _output_tokens,
+         valid_tokens) = self._process_model_input(x0, valid_tokens)
+        # Tokens kept clean (conditioning + padding); the complement is in-loss.
+        conditioning_tokens = torch.logical_not(valid_tokens)
+
+        num_tokens = valid_tokens.sum()
+        loop_pt, final_loop_ce = self._loop_loss(input_tokens, conditioning_tokens)
+        loop_nll = (loop_pt * valid_tokens).sum()
+        loop_loss = loop_nll / num_tokens
+        final_loop_nll = (final_loop_ce * valid_tokens).sum()
+       
+        assert loop_pt.ndim == 2       
+        self.log('loss_total', loop_loss, prog_bar=True)
+
+        # Report the final denoiser NLL for perplexity-style metrics (comparable to FLM).
+        return trainer_base.Loss(loss=loop_loss,
+                                 nlls=final_loop_nll,
+                                 prior_loss=0.0,
+                                 num_tokens=num_tokens)
+
 class DiscreteLoopFLM(FLM):
     """FLM variant trained with an additional *looped* (unrolled-ODE) objective.
 
@@ -523,5 +621,73 @@ class DiscreteLoopFLM(FLM):
         # Report the denoiser NLL for perplexity-style metrics (comparable to FLM).
         return trainer_base.Loss(loss=total_loss,
                                  nlls=denoiser_nll if self.gamma < 1 else loop_nll,
+                                 prior_loss=0.0,
+                                 num_tokens=num_tokens)
+    
+class CondUncondLoopFLM(DiscreteLoopFLM):
+    """Loop-FLM variant that stochastically mixes an *unconditional* denoiser
+    objective with a *conditional* looped-rollout objective.
+    IMPORTANT: Read the description of the unconditional training. This is NOT
+    learning the joint distribution p(x,y). The loss is only on the predicted solution
+    so it learns D(y | noisy(x)) -> y.  
+
+    For each batch we flip a coin:
+
+      * with probability ``prob_unconditional`` we train the plain FLM denoiser
+        loss with **no conditioning** -- the conditioning (board) tokens are no
+        longer kept clean, so the whole sequence (including the board) is noised
+        and the model must denoise the solution labels unconditionally. The loss
+        is still scored only on the valid (solution) tokens, so this learns the
+        unconditional marginal over solutions.
+
+      * with probability ``1 - prob_unconditional`` we train the conditional
+        looped-rollout cross-entropy (``_loop_loss``), where ``input_tokens`` is
+        the usual ``board | clean solution`` sequence and the board tokens are
+        kept clean throughout the unrolled ODE.
+
+    ``prob_unconditional=0`` recovers a purely conditional looped objective and
+    ``prob_unconditional=1`` recovers a purely unconditional denoiser objective.
+    """
+
+    def __init__(self, config, tokenizer):
+        super().__init__(config, tokenizer)
+        self.prob_unconditional = float(config.algo.prob_unconditional)
+
+    def _loss(self, x0, valid_tokens,
+              current_accumulation_step=None,
+              train_mode=False,
+              xT=None, given_t=None, not_sampling_t=False):
+        (input_tokens, _output_tokens,
+         valid_tokens) = self._process_model_input(x0, valid_tokens)
+        # Tokens kept clean (conditioning + padding); the complement is in-loss.
+        conditioning_tokens = torch.logical_not(valid_tokens)
+        num_tokens = valid_tokens.sum()
+
+        if torch.rand(1).item() < self.prob_unconditional:
+            # Unconditional denoiser branch: drop the conditioning so the clean
+            # solution labels (and the board) are all noised, then score only the
+            # valid (solution) tokens.
+            # (TODO: need to provide a conditioning token indicator such that I can generate unconditionally and not have it condition on the first half
+            no_conditioning = torch.zeros_like(conditioning_tokens)
+            denoiser_pt = self.loss(input_tokens, _output_tokens, no_conditioning,
+                                    current_accumulation_step, train_mode,
+                                    xT=xT, given_t=given_t,
+                                    not_sampling_t=not_sampling_t)
+            assert denoiser_pt.ndim == 2
+            nll = (denoiser_pt*valid_tokens).sum()
+            loss = nll / num_tokens
+            self.log('loss_uncond', loss, prog_bar=True)
+        else:
+            # Conditional looped-rollout branch (board kept clean throughout).
+            loop_pt = self._loop_loss(input_tokens, conditioning_tokens)
+            assert loop_pt.ndim == 2
+            nll = (loop_pt * valid_tokens).sum()
+            loss = nll / num_tokens
+            self.log('loss_loop', loss, prog_bar=True)
+
+        self.log('loss_either', loss, prog_bar=True)
+
+        return trainer_base.Loss(loss=loss,
+                                 nlls=nll,
                                  prior_loss=0.0,
                                  num_tokens=num_tokens)

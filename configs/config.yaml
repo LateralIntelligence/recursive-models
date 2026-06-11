@@ -41,6 +41,7 @@ sampling:
   temperature: 1.0
   solver: euler 
   gamma: 0.0
+  override_algo_steps: False
 
 training:
   loss_type: flow

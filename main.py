@@ -299,8 +299,10 @@ def _sudoku_eval(diffusion_model, config, tokenizer, logger):
             valid_tokens = batch['valid_tokens'].cuda().bool()  # 1 over solution
             real_rows = valid_tokens.any(dim=-1)                # drop padded rows
             conditioning_mask = torch.logical_not(valid_tokens)
+            num_sampling_steps = model.config.algo.num_timesteps if not config.sampling.override_algo_steps else config.sampling.steps
+            print(f"Sampling {num_sampling_steps} steps")
             full_seq_pred = model.conditional_generate_samples(
-                input_ids, conditioning_mask, num_steps=model.config.algo.num_timesteps)
+                input_ids, conditioning_mask, num_steps=num_sampling_steps)
 
             B, S = input_ids.shape
             assert S % 2 == 0, 'expected [puzzle | solution] layout'
@@ -363,6 +365,10 @@ def main(config):
         diffusion_model = algo.FLM 
     elif config.algo.name == "discrete_loop_flm":
         diffusion_model = algo.DiscreteLoopFLM
+    elif config.algo.name == "discrete_recurrent_flm":
+        diffusion_model = algo.DiscreteRecurrentFLM 
+    elif config.algo.name == "cond_uncond_loop_flm":
+        diffusion_model = algo.CondUncondLoopFLM
     else:
         raise ValueError(f"Given incorrect algo {config.algo.name}")
 
