@@ -143,6 +143,53 @@ def _sample_batch(rng: np.random.Generator, group_order: np.ndarray, puzzle_indi
 
     return start_index, np.concatenate(batch), np.concatenate(batch_puzzle_indices)
 
+def _infill_view(puzzle, solution, pad_id, loss_region='fill'):
+    """Build the in-place *infilling* view of a sudoku example.
+
+    Instead of the default ``[puzzle | solution]`` layout (where the model is
+    conditioned on a prepended puzzle and predicts the appended solution), the
+    model sees the *solution* grid directly together with a ``conditioning_mask``
+    that marks which cells were given as clues (held clean during diffusion) and
+    which it must fill in.
+
+    This relies on the sudoku token convention shared by
+    ``generate_sudoku_dataset`` and ``build_sudoku_dataset`` (both use
+    ``value_offset=1``): ``pad -> pad_id``, blank cell -> ``pad_id + 1``, given
+    digits 1..9 -> ``pad_id + 2 .. pad_id + 10``. A cell is therefore a clue iff
+    its puzzle value is neither pad nor blank.
+
+    The ``conditioning_mask`` (cells held clean) and ``valid_tokens`` (cells in
+    the loss) are independent: the conditioning is always exactly the given
+    clues, while ``loss_region`` selects what the loss covers.
+
+    Args:
+        puzzle: (..., L) int array of puzzle cells (clues + blanks).
+        solution: (..., L) int array of the fully solved grid.
+        pad_id: padding token id (blank cell id is ``pad_id + 1``).
+        loss_region: which cells contribute to the loss:
+          - "fill" (default): only the blank cells the model must predict;
+          - "board": every non-pad cell (clues + blanks), so the loss also
+            scores the clamped clue cells.
+    Returns:
+        (input_ids, conditioning_mask, valid_tokens), each (..., L):
+          - input_ids: the solution grid (what the model operates on),
+          - conditioning_mask: 1 on given clue cells (kept clean),
+          - valid_tokens: 1 on the cells in the loss (per ``loss_region``).
+    """
+    empty_id = pad_id + 1
+    is_blank = (puzzle == empty_id)                                   # cells to fill
+    conditioning_mask = (puzzle != pad_id) & (puzzle != empty_id)     # given clues
+    if loss_region == "board":
+        valid_tokens = (puzzle != pad_id)                            # all real cells
+    elif loss_region == "fill":
+        valid_tokens = is_blank
+    else:
+        raise ValueError(
+            f"Unknown infill loss_region {loss_region!r}; expected 'fill' or 'board'.")
+    return (solution,
+            conditioning_mask.astype(np.int32),
+            valid_tokens.astype(np.int32))
+
 class PuzzleDatasetConfig(pydantic.BaseModel):
     seed: int
     dataset_paths: List[str]
@@ -151,6 +198,12 @@ class PuzzleDatasetConfig(pydantic.BaseModel):
     epochs_per_iter: int  # Batch X epochs in an iteration to reduce overhead.
     rank: int
     num_replicas: int
+    # False -> [puzzle | solution] layout; True -> solution grid +
+    # conditioning_mask (see _infill_view). Driven by config.algo.infill.
+    infill: bool = False
+    # For the infill format, which cells contribute to the loss: "fill" (blanks
+    # only) or "board" (all non-pad cells). Unused for the prepend format.
+    infill_loss_region: str = "fill"
 
 class PuzzleDataset(IterableDataset):
     def __init__(self, config: PuzzleDatasetConfig, split: str = "train"):
@@ -248,7 +301,7 @@ class PuzzleDataset(IterableDataset):
                 
     def _collate_batch(self, batch):
         """
-        Returns {'input_ids', 'valid_tokens'}.
+        Returns {'input_ids', 'valid_tokens'} or {'input_ids', 'valid_tokens', 'conditioning_mask'}.
         input_ids: puzzle (inputs) concatenated with solution (labels), all valid token ids.
         valid_tokens: boolean mask where 1 means tokens that are included in loss calculation.
             0 on empty all padded rows and also on conditioning context. Loss only on solution area. 
@@ -282,6 +335,17 @@ class PuzzleDataset(IterableDataset):
         # Then sanitize so input_ids holds only valid token ids (replace -100 label to pad_id)
         labels = np.where(label_mask, labels, self.metadata.pad_id)
 
+        if self.config.infill:
+            input_ids, conditioning_mask, valid_tokens = _infill_view(
+                inputs, labels, self.metadata.pad_id,
+                loss_region=self.config.infill_loss_region
+            )
+            return {
+                "input_ids": torch.from_numpy(input_ids).long(),
+                "valid_tokens": torch.from_numpy(valid_tokens),
+                "conditioning_mask" : torch.from_numpy(conditioning_mask)
+            }
+        
         input_ids      = np.concatenate([inputs, labels], axis=-1)
         # valid tokens (tokens that go into loss) exclude conditioning input tokens and padded tokens   
         valid_tokens = np.concatenate([np.zeros_like(input_mask), label_mask], axis=-1).astype(np.int32)
@@ -377,6 +441,9 @@ class PuzzleDataset(IterableDataset):
 
 def get_puzzle_dataset(config, rank: int, world_size:int):
     train_epochs_per_iter = config.data.eval_interval if config.data.eval_interval is not None else config.trainer.max_steps
+    infill = getattr(config.algo, "infill", False)
+    infill_loss_region = getattr(config.data, "infill_loss_region", "fill")
+    
     train_dataset = PuzzleDataset(PuzzleDatasetConfig(
         seed=config.seed,
         dataset_paths=config.data.data_paths,
@@ -384,7 +451,9 @@ def get_puzzle_dataset(config, rank: int, world_size:int):
         num_replicas=world_size,
         test_set_mode=False,
         epochs_per_iter=train_epochs_per_iter,
-        global_batch_size=config.loader.batch_size * world_size 
+        global_batch_size=config.loader.batch_size * world_size,
+        infill=infill,
+        infill_loss_region=infill_loss_region 
     ), split='train')
     test_dataset = PuzzleDataset(PuzzleDatasetConfig(
         seed=config.seed,
@@ -393,7 +462,9 @@ def get_puzzle_dataset(config, rank: int, world_size:int):
         num_replicas=world_size,
         test_set_mode=True,
         epochs_per_iter=1,
-        global_batch_size=config.loader.eval_batch_size * world_size 
+        global_batch_size=config.loader.eval_batch_size * world_size,
+        infill=infill,
+        infill_loss_region=infill_loss_region 
     ), split='test')
 
     return {
@@ -404,20 +475,38 @@ def get_puzzle_dataset(config, rank: int, world_size:int):
 class SudokuGeneratedDataset(torch.utils.data.Dataset):
     """Map-style dataset over generated sudoku examples.
 
-    Each item is a flat [puzzle(81) | solution(81)] sequence with a
+    Each item is either a flat [puzzle(81) | solution(81)] sequence with a
     matching valid_tokens mask (0 over the puzzle/conditioning half,
-    1 over the solution half). This mirrors the {input_ids, valid_tokens}
-    contract produced by PuzzleDataset._collate_batch, so the trainer is
-    agnostic to which sudoku source it consumes.
+    1 over the solution half) OR
+        [solution(81)] sequence with a conditioning mask on hints, and 
+        valid tokens on either the entire board or only empty cells to fill 
     """
-    def __init__(self, data):
+    def __init__(self, data, infill=False, infill_loss_region='fill'):
+        # Generated sudoku uses value_offset=1, so pad=0 and the blank cell is 1.
+        self.PAD_ID = 0
         self.input_ids = data["input_ids"]
         self.valid_tokens = data["valid_tokens"]
+        self.infill=infill
+        self.infill_loss_region = infill_loss_region
 
     def __len__(self):
         return len(self.input_ids)
 
     def __getitem__(self, idx):
+        if self.infill:
+            # Stored layout is [puzzle | solution]; derive the in-place infilling
+            # view (solution grid + conditioning_mask over the given clues).
+            ids = np.asarray(self.input_ids[idx])
+            half = len(ids) // 2
+            input_ids, conditioning_mask, valid_tokens = _infill_view(
+                ids[:half], ids[half:], self.PAD_ID,
+                loss_region=self.infill_loss_region)
+            return {
+                "input_ids": torch.tensor(input_ids, dtype=torch.long),
+                "valid_tokens": torch.tensor(valid_tokens, dtype=torch.long),
+                "conditioning_mask": torch.tensor(conditioning_mask, dtype=torch.long),
+            }
+
         return {
             "input_ids": torch.tensor(self.input_ids[idx], dtype=torch.long),
             "valid_tokens": torch.tensor(self.valid_tokens[idx], dtype=torch.long),
@@ -521,6 +610,18 @@ def _build_sudoku_splits(config):
     _SUDOKU_SPLIT_CACHE[key] = splits
     return splits
 
+def _deterministic_subset_indices(num_total, subset_n, subset_seed):
+    """Pick `subset_n` example indices deterministically.
+
+    The selection depends only on (num_total, subset_n, subset_seed), NOT on
+    the training `seed`, so the same examples are reused across training runs
+    that vary the training seed. Returns sorted indices to preserve the
+    underlying (already deterministic) example order.
+    """
+    rng = np.random.Generator(np.random.Philox(seed=subset_seed))
+    chosen = rng.choice(num_total, size=subset_n, replace=False)
+    return np.sort(chosen).tolist()
+
 
 def get_sudoku_dataset(config, mode, rank=0, world_size=1):
     """Return a map-style generated-sudoku split.
@@ -532,7 +633,23 @@ def get_sudoku_dataset(config, mode, rank=0, world_size=1):
     """
     splits = _build_sudoku_splits(config)
     split = "train" if mode == "train" else "validation"
-    dataset = SudokuGeneratedDataset(splits[split])
+    infill = getattr(config.algo, "infill", False)
+    infill_loss_region = getattr(config.data, "infill_loss_region", "fill")
+    dataset = SudokuGeneratedDataset(splits[split], infill=infill,
+                infill_loss_region=infill_loss_region)
+    
+    if mode == 'train':
+        subset_n = getattr(config.data, "train_subset_n", None)
+        if subset_n is not None and 0 < subset_n < len(dataset):
+            subset_seed = getattr(config.data, "subset_seed", 0)
+            indices = _deterministic_subset_indices(
+                len(dataset),subset_n, subset_seed 
+            )
+            LOGGER.info(
+                f"subsetting sudoku train split to {subset_n}/{len(dataset)} examples"
+            )
+            dataset = torch.utils.data.Subset(dataset, indices)
+    
     if world_size > 1:
         # Shard across ranks (no DistributedSampler is configured upstream).
         dataset = torch.utils.data.Subset(

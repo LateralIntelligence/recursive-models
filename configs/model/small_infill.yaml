@@ -1,0 +1,11 @@
+name: small_infill
+type: ddit
+hidden_size: 512 #768
+cond_dim: 128
+length: 81
+n_blocks: 8 #12
+n_heads: 8 #12
+scale_by_sigma: True
+dropout: 0.1
+tie_word_embeddings: False
+vocab_lookup: True

@@ -2,6 +2,7 @@ is_iterable: True
 train: sudoku-extreme
 valid: sudoku-extreme
 tokenizer_name_or_path: sudoku-extreme
+infill_loss_region: fill # fill is blanks only, board is full  
 cache_dir: ./cache
 wrap: False
 streaming: True

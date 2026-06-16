@@ -29,6 +29,7 @@ class FLMBase(trainer_base.TrainerBase):
         super().__init__(config, tokenizer)
         self.t_min = config.algo.t_min
         self.t_max = config.algo.t_max
+        self.diffusion_forcing = getattr(config.algo, 'diffusion_forcing', False)
         self.lut_a2g, self.lut_g2a = utils.build_luts(K=self.vocab_size)
         self._is_resuming = (
             config.checkpointing.resume_from_ckpt
@@ -61,16 +62,31 @@ class FLMBase(trainer_base.TrainerBase):
 
     def _process_model_input(self, x0, valid_tokens):
         return x0, None, valid_tokens
+    
+    @staticmethod
+    def _resolve_conditioning(valid_tokens, conditioning_mask):
+        """Tokens to hold clean (clamp) during diffusion.
+
+        When the batch supplies an explicit ``conditioning_mask`` (e.g. the
+        in-place infilling format, where the clue cells to keep clean are NOT
+        simply the complement of the loss mask), use it directly. Otherwise fall
+        back to the default ``[puzzle | solution]`` convention where everything
+        outside the loss region (``valid_tokens``) is conditioning/padding.
+        """
+        if conditioning_mask is not None:
+            return conditioning_mask.bool()
+        return torch.logical_not(valid_tokens)
 
     def _loss(self, x0, valid_tokens,
               current_accumulation_step=None,
               train_mode=False,
-              xT=None, given_t=None, not_sampling_t=False):
+              xT=None, given_t=None, not_sampling_t=False,
+              conditioning_mask=None):
         """Override to always dispatch to self.loss() for all FLM classes."""
         (input_tokens, output_tokens,
          valid_tokens) = self._process_model_input(x0, valid_tokens)
-        # TODO: better naming; for now, valid tokens to be counted in loss are non-conditioning tokens 
-        conditioning_tokens = torch.logical_not(valid_tokens) 
+        
+        conditioning_tokens = self._resolve_conditioning(valid_tokens, conditioning_mask)
 
         loss = self.loss(input_tokens, output_tokens, conditioning_tokens, 
                          current_accumulation_step, train_mode,
@@ -294,9 +310,14 @@ class FLM(FLMBase):
         tau_t = self._sample_t_interval(B, current_accumulation_step,
                                     t_min=self.t_min, t_max=self.t_max)
         t = self._tau_to_t(tau_t)
+        if self.diffusion_forcing and conditioning_tokens is not None:
+            clean_mask = self._sample_clean_mask(conditioning_tokens)
+        else:
+            clean_mask = conditioning_tokens
+        df_mask = clean_mask if self.diffusion_forcing else None
  
-        x_t, target_data = self.corrupt_continuous(x0, t, conditioning_tokens)
-        f = self.forward(x_t, tau_t) #condition on tau_t
+        x_t, target_data = self.corrupt_continuous(x0, t, clean_mask)
+        f = self.forward(x_t, tau_t, conditioning_mask=df_mask) #condition on tau_t
         loss = -(target_data * f).sum(dim=-1)
 
         #self.log('loss', loss.mean(), prog_bar=True)
@@ -312,7 +333,7 @@ class FLM(FLMBase):
         """Conditionally generate samples using Euler ODE solver.
         
         Params:
-            puzzle_solution_input: (torch.Tensor) (B,L) sequences where sequence contains both puzzle first half and second half solution
+            puzzle_solution_input: (torch.Tensor) (B,L) sequences
             conditioning_mask: (torch.Tensor) Boolean where 1 represents conditioning (i.e puzzle) tokens         
         
         Returns:
@@ -338,7 +359,9 @@ class FLM(FLMBase):
             tau_t_in = tau_t_curr.expand(B)
             t_in = self._tau_to_t(tau_t_in)
             dt = self._tau_to_t(tau_t_next.expand(B)) - t_in
-            x_1_pred = self.forward(z, tau_t_in)
+            df_mask = conditioning_mask if self.diffusion_forcing else None
+            x_1_pred = self.forward(z, tau_t_in, conditioning_mask=df_mask)
+            #x_1_pred = self.forward(z, tau_t_in)
             x_1_pred_probs = x_1_pred.exp()
 
             if i == num_steps - 1:
@@ -384,7 +407,7 @@ class FLM(FLMBase):
             z = z + dt.view(-1, 1, 1) * v
 
         return z.argmax(dim=-1)
-    
+
 class DiscreteRecurrentFLM(FLM):
     """FLM trained with a looped (unrolled-ODE) objective.
     We consider fixed uniformly spaced timesteps; and unrolls using the first 
@@ -425,16 +448,24 @@ class DiscreteRecurrentFLM(FLM):
         # sampler). t is derived from tau exactly as in conditional_generate_samples.
         tau_vals = torch.linspace(0.0, 1.0, N + 1, device=device)
 
-        # x_t at t=0 is pure noise, with conditioning tokens clamped to clean.
+        if self.diffusion_forcing and conditioning_tokens is not None:
+            clean_mask = self._sample_clean_mask(conditioning_tokens)
+        else:
+            clean_mask = conditioning_tokens
+        df_mask = clean_mask if self.diffusion_forcing else None
+
+        # x_t at t=0 is pure noise, with conditioning tokens noised based on the clean_mask
         t0 = torch.zeros(B, device=device)
-        z, _ = self.corrupt_continuous(x0, t0, conditioning_tokens)  # (B, L, V), float32
+        z, _ = self.corrupt_continuous(x0, t0, clean_mask)  # (B, L, V), float32
 
         final_log_probs = None
         sum_loss_across_time = 0.0 
         for k in range(N):
             tau_t_in = tau_vals[k].expand(B)
             t_in = self._tau_to_t(tau_t_in)
-            f = self.forward(z, tau_t_in)  # log-probs over vocab, (B, L, V)
+            f = self.forward(z, tau_t_in, conditioning_mask=df_mask)  # log-probs over vocab, (B, L, V)
+            
+            #f = self.forward(z, tau_t_in)  # log-probs over vocab, (B, L, V)
             loss = -(target_data * f).sum(dim=-1)
             if k >= (N-N_backprop): #only have gradient calculation for last N_backprop
                 sum_loss_across_time += loss
@@ -449,7 +480,7 @@ class DiscreteRecurrentFLM(FLM):
             v = (x_1_pred_probs - z) / (1.0 - t_in.view(-1, 1, 1) + eps)
             z = z + dt.view(-1, 1, 1) * v
             # Keep conditioning tokens clean at every step.
-            z = torch.where(conditioning_tokens.unsqueeze(-1), target_data, z)
+            z = torch.where(clean_mask.unsqueeze(-1), target_data, z)
             if k < (N-N_backprop): 
                 #no gradient passing through the first layers not included in last N_backprop
                 # (TODO: you can ablate this) 
@@ -462,11 +493,11 @@ class DiscreteRecurrentFLM(FLM):
     def _loss(self, x0, valid_tokens,
               current_accumulation_step=None,
               train_mode=False,
-              xT=None, given_t=None, not_sampling_t=False):
+              xT=None, given_t=None, not_sampling_t=False, conditioning_mask=None):
         (input_tokens, _output_tokens,
          valid_tokens) = self._process_model_input(x0, valid_tokens)
         # Tokens kept clean (conditioning + padding); the complement is in-loss.
-        conditioning_tokens = torch.logical_not(valid_tokens)
+        conditioning_tokens = self._resolve_conditioning(valid_tokens, conditioning_mask)
 
         num_tokens = valid_tokens.sum()
         loop_pt, final_loop_ce = self._loop_loss(input_tokens, conditioning_tokens)
@@ -554,15 +585,22 @@ class DiscreteLoopFLM(FLM):
         # sampler). t is derived from tau exactly as in conditional_generate_samples.
         tau_vals = torch.linspace(0.0, 1.0, N + 1, device=device)
 
+        if self.diffusion_forcing and conditioning_tokens is not None:
+            clean_mask = self._sample_clean_mask(conditioning_tokens)
+        else:
+            clean_mask = conditioning_tokens
+        df_mask = clean_mask if self.diffusion_forcing else None
+
+
         # x_t at t=0 is pure noise, with conditioning tokens clamped to clean.
         t0 = torch.zeros(B, device=device)
-        z, _ = self.corrupt_continuous(x0, t0, conditioning_tokens)  # (B, L, V), float32
+        z, _ = self.corrupt_continuous(x0, t0, clean_mask)  # (B, L, V), float32
 
         final_log_probs = None
         for k in range(N):
             tau_t_in = tau_vals[k].expand(B)
             t_in = self._tau_to_t(tau_t_in)
-            f = self.forward(z, tau_t_in)  # log-probs over vocab, (B, L, V)
+            f = self.forward(z, tau_t_in, conditioning_mask=df_mask)  # log-probs over vocab, (B, L, V)
 
             if k == N - 1:
                 # Final x_1 prediction: score its logits against the true tokens.
@@ -574,11 +612,10 @@ class DiscreteLoopFLM(FLM):
             v = (x_1_pred_probs - z) / (1.0 - t_in.view(-1, 1, 1) + eps)
             z = z + dt.view(-1, 1, 1) * v
             # Keep conditioning tokens clean at every step.
-            z = torch.where(conditioning_tokens.unsqueeze(-1), target_data, z)
+            z = torch.where(clean_mask.unsqueeze(-1), target_data, z)
             if k < (N-N_backprop): 
                 #no gradient 
                 z = z.detach()
-
 
         loop_ce = -(target_data * final_log_probs).sum(dim=-1)  # (B, L)
         return loop_ce
@@ -586,11 +623,12 @@ class DiscreteLoopFLM(FLM):
     def _loss(self, x0, valid_tokens,
               current_accumulation_step=None,
               train_mode=False,
-              xT=None, given_t=None, not_sampling_t=False):
+              xT=None, given_t=None, not_sampling_t=False,
+              conditioning_mask=None):
         (input_tokens, _output_tokens,
          valid_tokens) = self._process_model_input(x0, valid_tokens)
         # Tokens kept clean (conditioning + padding); the complement is in-loss.
-        conditioning_tokens = torch.logical_not(valid_tokens)
+        conditioning_tokens = self._resolve_conditioning(valid_tokens, conditioning_mask)
 
         total_loss = 0
         num_tokens = valid_tokens.sum()
@@ -656,11 +694,12 @@ class CondUncondLoopFLM(DiscreteLoopFLM):
     def _loss(self, x0, valid_tokens,
               current_accumulation_step=None,
               train_mode=False,
-              xT=None, given_t=None, not_sampling_t=False):
+              xT=None, given_t=None, not_sampling_t=False,
+              conditioning_mask=None):
         (input_tokens, _output_tokens,
          valid_tokens) = self._process_model_input(x0, valid_tokens)
         # Tokens kept clean (conditioning + padding); the complement is in-loss.
-        conditioning_tokens = torch.logical_not(valid_tokens)
+        conditioning_tokens = self._resolve_conditioning(valid_tokens, conditioning_mask)
         num_tokens = valid_tokens.sum()
 
         if torch.rand(1).item() < self.prob_unconditional:

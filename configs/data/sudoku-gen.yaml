@@ -5,6 +5,7 @@ is_iterable: False
 train: sudoku
 valid: sudoku
 tokenizer_name_or_path: sudoku
+infill_loss_region: fill #board/fill.  fill is blanks only, board is full  
 cache_dir: ./cache
 wrap: False
 streaming: False
@@ -15,6 +16,10 @@ data_paths: []
 data_paths_test: []
 
 eval_interval: 10_000
+
+#subset 
+train_subset_n: null 
+subset_seed: 0
 
 # Generation parameters (consumed by dataloader.get_sudoku_dataset).
 num_train: 48000

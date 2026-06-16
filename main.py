@@ -296,19 +296,32 @@ def _sudoku_eval(diffusion_model, config, tokenizer, logger):
                     and total_batches >= config.eval.sudoku_max_batches):
                 break
             input_ids = batch['input_ids'].cuda()
-            valid_tokens = batch['valid_tokens'].cuda().bool()  # 1 over solution
-            real_rows = valid_tokens.any(dim=-1)                # drop padded rows
-            conditioning_mask = torch.logical_not(valid_tokens)
-            num_sampling_steps = model.config.algo.num_timesteps if not config.sampling.override_algo_steps else config.sampling.steps
-            print(f"Sampling {num_sampling_steps} steps")
-            full_seq_pred = model.conditional_generate_samples(
-                input_ids, conditioning_mask, num_steps=num_sampling_steps)
+            
+            if not config.sampling.override_algo_steps:
+                num_sampling_steps = model.config.algo.get('num_timesteps', None)
+            else:
+                num_sampling_steps = config.sampling.steps
+            
+            if config.algo.get('infill', False):
+                conditioning_mask = batch['conditioning_mask'].cuda().bool()
+                real_rows = conditioning_mask.any(dim=-1)       # padded rows have no clues
+                full_seq_pred = model.conditional_generate_samples(
+                    input_ids, conditioning_mask, num_steps=num_sampling_steps)
+                gt = input_ids
+                generated = full_seq_pred
+            else:
+                valid_tokens = batch['valid_tokens'].cuda().bool()  # 1 over solution
+                real_rows = valid_tokens.any(dim=-1)                # drop padded rows
+                conditioning_mask = torch.logical_not(valid_tokens)
+                full_seq_pred = model.conditional_generate_samples(
+                    input_ids, conditioning_mask, num_steps=num_sampling_steps)
+                S = input_ids.shape[1]
+                assert S % 2 == 0, 'expected [puzzle | solution] layout'
+                half = S // 2 
+                gt = input_ids[:, half:]
+                generated = full_seq_pred[:, half:]
 
-            B, S = input_ids.shape
-            assert S % 2 == 0, 'expected [puzzle | solution] layout'
-            half = S // 2
-            gt = input_ids[:, half:]
-            generated = full_seq_pred[:, half:]
+            B = input_ids.shape[0]
             correct = (generated == gt).all(dim=1)
 
             for i in range(B):

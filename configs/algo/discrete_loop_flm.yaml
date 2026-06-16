@@ -25,3 +25,9 @@ gamma: 0.5
 # If True, the denoiser loss samples time uniformly from the discrete grid
 # linspace(0, 1, num_timesteps+1) (matching the loop) instead of continuous t.
 discrete_denoiser_time: True 
+
+infill: True
+
+diffusion_forcing: True # feed per token time 
+conditioning_time_random: True 
+conditioning_prob_clean: 1.0 

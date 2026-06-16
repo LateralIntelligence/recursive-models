@@ -301,11 +301,57 @@ class TrainerBase(L.LightningModule):
 
     def _process_model_output(self, model_output, xt, sigma):
         raise NotImplementedError
+    
+    def _sample_clean_mask(self, conditioning_mask):
+        """Which tokens are presented to the model as clean (time 1.0).
+        By default every conditioning token is clean. When
+        ``algo.conditioning_time_random`` is on, during *training* each
+        sequence has a probability "conditional_prob_clean" of the cond tokens remaining clean;
+        otherwise it shares
+        the sequence time, letting the model see partially-noised conditioning.
+        Eval and sampling always keep conditioning clean so generation is
+        consistent.
 
-    def forward(self, xt, sigma, sigma_prime=None, use_jvp_attn=False):
+        Args:
+            conditioning_mask: (B, L) bool, 1 where the token is clean context.
+        Returns:
+            (B, L) bool clean mask.
+        """
+        clean = conditioning_mask.bool()
+        if self.training and getattr(self.config.algo, 'conditioning_time_random', False):
+            p = float(getattr(self.config.algo, 'conditioning_prob_clean', 1.0))
+            keep_clean = torch.rand(
+                conditioning_mask.shape[0], device=conditioning_mask.device) < p
+            clean = clean & keep_clean.unsqueeze(-1)
+        return clean
+    
+    @staticmethod
+    def _apply_clean_time(sigma, clean_mask):
+        """Expand per-sequence time to per-token, pinning clean tokens to 1.0.
+
+        Args:
+            sigma: (B,) per-sequence time.
+            clean_mask: (B, L) bool, 1 where the token's time is forced to 1.0.
+        Returns:
+            (B, L) per-token time.
+        """
+        B, L = clean_mask.shape
+        sigma = sigma.reshape(B, 1).expand(B, L).clone()
+        return torch.where(clean_mask, torch.ones_like(sigma), sigma)
+
+    def forward(self, xt, sigma, sigma_prime=None, use_jvp_attn=False,
+                conditioning_mask=None):
         sigma = self._process_sigma(sigma)
         if sigma_prime is not None:
             sigma_prime = self._process_sigma(sigma_prime)
+        
+        # Need to have our noise tensor match the conditioning token noise
+        if conditioning_mask is not None:
+            clean_mask = conditioning_mask.bool()
+            sigma = self._apply_clean_time(sigma, clean_mask)
+            if sigma_prime is not None:
+                sigma_prime = self._apply_clean_time(sigma_prime, clean_mask)
+
         with torch.amp.autocast(device_type=self.device.type, dtype=torch.float32):
             model_output = self.backbone(xt, sigma, sigma_prime, use_jvp_attn=use_jvp_attn)
         
@@ -327,7 +373,8 @@ class TrainerBase(L.LightningModule):
                             train_mode=True,
                             xT=None if 'xT' not in batch else batch['xT'],
                             given_t=batch['given_t'] if 'given_t' in batch else None,
-                            not_sampling_t=self.config.training.not_sampling_t
+                            not_sampling_t=self.config.training.not_sampling_t,
+                            conditioning_mask=batch.get('conditioning_mask', None)
                             )
         self.metrics.update_train(losses.nlls, losses.prior_loss,
                                   losses.num_tokens)
@@ -362,6 +409,46 @@ class TrainerBase(L.LightningModule):
         """
         name = str(getattr(self.config.data, 'valid', '') or '')
         return 'sudoku' in name.lower()
+    
+    def _sudoku_batch_correct(self, batch, num_steps):
+        """Count exactly-solved puzzles in one eval batch.
+
+        Two layouts, selected by ``config.algo.infill``:
+          - infill: ``input_ids`` is the solution grid and
+            ``batch['conditioning_mask']`` marks the given clues (held clean);
+            the whole generated grid is compared against the solution.
+          - prepend (default): ``input_ids`` is ``[puzzle | solution]``; condition
+            on the puzzle half and compare the generated solution half.
+
+        Returns ``(num_correct, total)`` over real (non-padded) rows.
+        """
+        if getattr(self.config.algo, 'infill', False):
+            solution = batch['input_ids'].to(self.device)
+            conditioning_mask = batch['conditioning_mask'].to(self.device).bool()
+            real_rows = conditioning_mask.any(dim=-1)  # padded rows have no clues
+            pred = self.conditional_generate_samples(
+                solution, conditioning_mask, num_steps=num_steps)
+            # TODO: decide if accuracy should be full board, including clues.
+            # Clue cells are clamped clean, so a full-grid match == filling right.
+            correct = (pred == solution).all(dim=1)
+        else:
+            input_ids = batch['input_ids'].to(self.device)
+            valid_tokens = batch['valid_tokens'].to(self.device).bool()  # 1 over solution
+            real_rows = valid_tokens.any(dim=-1)                         # drop padded rows
+            conditioning_mask = torch.logical_not(valid_tokens)
+            full_seq_pred = self.conditional_generate_samples(
+                input_ids, conditioning_mask, num_steps=num_steps)
+
+            B, S = input_ids.shape
+            assert S % 2 == 0, 'expected [puzzle | solution] layout'
+            half = S // 2
+            gt = input_ids[:, half:]
+            generated = full_seq_pred[:, half:]
+            correct = (generated == gt).all(dim=1)
+
+        num_correct = int((correct & real_rows).sum().item())
+        total = int(real_rows.sum().item())
+        return num_correct, total
 
     @torch.no_grad()
     def _sudoku_eval(self, use_val=True):
@@ -397,22 +484,10 @@ class TrainerBase(L.LightningModule):
             if max_batches is not None and max_batches > 0 \
                     and num_batches >= max_batches:
                 break
-            input_ids = batch['input_ids'].to(self.device)
-            valid_tokens = batch['valid_tokens'].to(self.device).bool()  # 1 over solution
-            real_rows = valid_tokens.any(dim=-1)                         # drop padded rows
-            conditioning_mask = torch.logical_not(valid_tokens)
-            full_seq_pred = self.conditional_generate_samples(
-                input_ids, conditioning_mask, num_steps=num_steps)
-
-            B, S = input_ids.shape
-            assert S % 2 == 0, 'expected [puzzle | solution] layout'
-            half = S // 2
-            gt = input_ids[:, half:]
-            generated = full_seq_pred[:, half:]
-            correct = (generated == gt).all(dim=1)
-
-            num_correct += int((correct & real_rows).sum().item())
-            total += int(real_rows.sum().item())
+            batch_correct, batch_total = self._sudoku_batch_correct(
+                batch, num_steps)
+            num_correct += batch_correct
+            total += batch_total
             num_batches += 1
 
         # Aggregate counts (not per-rank accuracies) across GPUs.
@@ -433,7 +508,8 @@ class TrainerBase(L.LightningModule):
         del batch_idx
         losses = self._loss(batch['input_ids'],
                             batch['valid_tokens'],
-                            xT=None if 'xT' not in batch else batch['xT']
+                            xT=None if 'xT' not in batch else batch['xT'],
+                            conditioning_mask=batch.get('conditioning_mask', None),
                             )
         self.metrics.update_valid(losses.nlls, losses.prior_loss,
                                   losses.num_tokens)
@@ -615,7 +691,8 @@ class TrainerBase(L.LightningModule):
     def _loss(self, x0, valid_tokens,
               current_accumulation_step=None,
               train_mode=False,
-              xT=None, given_t=None, not_sampling_t=False):
+              xT=None, given_t=None, not_sampling_t=False, conditioning_mask=None):
+        del conditioning_mask
         (input_tokens, output_tokens,
          valid_tokens) = self._process_model_input(
             x0, valid_tokens)
@@ -635,3 +712,4 @@ class TrainerBase(L.LightningModule):
                     nlls=nlls,
                     prior_loss=0.0,
                     num_tokens=num_tokens)
+

@@ -251,11 +251,13 @@ class TimestepEmbedder(nn.Module):
     def timestep_embedding(t, dim, max_period=10000):
         """
         Create sinusoidal timestep embeddings.
-        :param t: a 1-D Tensor of N indices, one per batch element.
-                          These may be fractional.
+        :param t: a Tensor of indices (these may be fractional). Any shape is
+                          supported -- the embedding is appended as a new last
+                          dim -- so both per-sequence ``(B,)`` and per-token
+                          ``(B, L)`` time inputs work (diffusion forcing).
         :param dim: the dimension of the output.
         :param max_period: controls the minimum frequency of the embeddings.
-        :return: an (N, D) Tensor of positional embeddings.
+        :return: a ``(*t.shape, dim)`` Tensor of positional embeddings.
         """
         # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         half = dim // 2
@@ -263,12 +265,12 @@ class TimestepEmbedder(nn.Module):
             - math.log(max_period)
             * torch.arange(start=0, end=half, dtype=torch.float32, device=t.device)
             / half)
-        args = t[:, None].float() * freqs[None]
+        args = t[..., None].float() * freqs
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
             embedding = torch.cat(
                 [embedding,
-                 torch.zeros_like(embedding[:, :1])], dim=-1)
+                torch.zeros_like(embedding[..., :1])], dim=-1)
         return embedding
 
     def forward(self, t):
@@ -312,12 +314,12 @@ class TimestepEmbedderSquaredReLU(nn.Module):
             - math.log(max_period)
             * torch.arange(start=0, end=half, dtype=torch.float32, device=t.device)
             / half)
-        args = t[:, None].float() * freqs[None]
+        args = t[..., None].float() * freqs
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
             embedding = torch.cat(
                 [embedding,
-                 torch.zeros_like(embedding[:, :1])], dim=-1)
+                 torch.zeros_like(embedding[..., :1])], dim=-1)
         return embedding
 
     def forward(self, t):
@@ -463,8 +465,16 @@ class DDiTBlock(nn.Module):
         x = self.norm1(x)
 
         if self.adaLN:
+            # `c` may be per-sequence (B, cond) or per-token (B, L, cond) for
+            # diffusion forcing. In the per-sequence case insert a length-1 axis
+            # so the modulation broadcasts over the sequence; in the per-token
+            # case it already has one shift/scale/gate per position.
+            mod = self.adaLN_modulation(c)
+            if mod.dim() == 2:
+                mod = mod[:, None]
+
             (shift_msa, scale_msa, gate_msa, shift_mlp,
-             scale_mlp, gate_mlp) = self.adaLN_modulation(c)[:, None].chunk(6, dim=2)
+             scale_mlp, gate_mlp) = mod.chunk(6, dim=-1)
             x = modulate_fused(x, shift_msa, scale_msa)
         
         qkv = self.attn_qkv(x)
@@ -551,7 +561,11 @@ class DDiTFinalLayer(nn.Module):
     def forward(self, x, c):
         x = self.norm_final(x)
         if self.adaLN:
-            shift, scale = self.adaLN_modulation(c)[:, None].chunk(2, dim=2)
+            mod = self.adaLN_modulation(c)
+            if mod.dim() == 2:
+                    mod = mod[:, None]
+
+            shift, scale = mod.chunk(2, dim=-1)
             x = modulate_fused(x, shift, scale)
         x = self.linear(x)
         return x
