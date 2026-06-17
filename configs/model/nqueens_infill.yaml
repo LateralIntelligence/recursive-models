@@ -1,0 +1,11 @@
+name: nqueens_infill
+type: ddit
+hidden_size: 512
+cond_dim: 128
+length: 64  # N*N for 8x8. Override model.length=100 for 10x10.
+n_blocks: 8
+n_heads: 8
+scale_by_sigma: True
+dropout: 0.1
+tie_word_embeddings: False
+vocab_lookup: True

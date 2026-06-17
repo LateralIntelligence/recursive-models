@@ -1,0 +1,33 @@
+# Select with `data=nqueens-10` on the CLI.
+# N-Queens completion on a 10x10 board.
+# Layout per example: [ puzzle(100) | solution(100) ] -> length 200.
+# Pair with `model=nqueens_infill model.length=100` and `algo.infill=true`.
+is_iterable: False
+train: nqueens
+valid: nqueens
+tokenizer_name_or_path: nqueens
+infill_loss_region: fill  # board/fill. fill = blanks only, board = full board
+cache_dir: ./cache
+wrap: False
+streaming: False
+insert_train_eos: False
+insert_valid_eos: False
+
+data_paths: []
+data_paths_test: []
+
+eval_interval: 10_000
+
+# subset
+train_subset_n: null
+subset_seed: 0
+
+# Generation parameters (consumed by dataloader.get_nqueens_dataset).
+# Puzzles remove k in {7,8,9} queens (-> 1,2,3 clues kept), generated as an
+# equal split across k. Inputs are split 85:15 train/test by unique clue board
+# (the 15% test side is held out for the eval). num_train/num_valid are soft
+# caps on the total per split; the equal, by-input space for 10x10 yields
+# ~5.5k per k -> ~16.6k train, so the caps below don't bind here.
+nqueens_n: 10
+num_train: 48000
+num_valid: 2000
