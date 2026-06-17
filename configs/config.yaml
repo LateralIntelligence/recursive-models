@@ -9,7 +9,7 @@ defaults:
   - /prior: none
   - /algo: flm
 
-mode: train  # train / sample_eval / sudoku_eval
+mode: train  # train / sample_eval / sudoku_eval / nqueens_eval 
 
 # di4c configs:
 is_di4c: False
@@ -78,7 +78,10 @@ eval:
   # next to the evaluated checkpoint's run dir. -1 batches = use full valid set.
   sudoku_output_dir: null
   sudoku_max_batches: -1
-
+  # nqueens eval
+  nqueens_output_dir: null 
+  nqueens_num_puzzles: 200 #TODO: double check
+  nqueens_num_samples: 20
 
 optim:
   weight_decay: 0

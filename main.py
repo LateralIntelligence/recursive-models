@@ -360,6 +360,90 @@ def _sudoku_eval(diffusion_model, config, tokenizer, logger):
         })
     return results
 
+@L.pytorch.utilities.rank_zero_only
+@torch.no_grad()
+def _nqueens_eval(diffusion_model, config, tokenizer, logger):
+    """Evaluate N-Queens completion: accuracy and coverage, binned by #solutions.
+
+    For each eval puzzle (a board with `k` clue queens) we draw
+    ``eval.nqueens_num_samples`` stochastic completions and measure:
+      - accuracy = fraction of samples that satisfy ALL N-Queens constraints and
+        respect the clues (equivalently, land in the puzzle's completion set);
+      - coverage = distinct valid solutions found / total valid completions.
+    Puzzles are binned by their completion count (the GRAM-style x-axis). Results
+    are written to results.json; aggregates are logged to wandb.
+    NOTE: uses the model ckpt's saved config for sampling steps, like sudoku eval.
+    """
+    from collections import defaultdict
+    from dataset_code import nqueens_common as nq
+    from dataset_code.generate_nqueens_dataset import build_nqueens_eval_puzzles
+
+    logger.info('Starting N-Queens eval.')
+    assert config.eval.checkpoint_path, \
+        'config.eval.checkpoint_path must be set for nqueens_eval'
+    ckpt_path = _resolve_against_original_cwd(config.eval.checkpoint_path)
+
+    model = diffusion_model.load_from_checkpoint(
+        ckpt_path, tokenizer=tokenizer, weights_only=False).to('cuda')
+    model._eval_mode()
+
+    n = int(config.data.get('nqueens_n', 8))
+    num_samples = int(config.eval.get('nqueens_num_samples', 20))
+    num_puzzles = int(config.eval.get('nqueens_num_puzzles', 200))
+    assert model.num_tokens == n * n, (
+        f'model.length ({model.num_tokens}) must equal n*n ({n * n}); '
+        f'set model=nqueens_infill with model.length={n * n}.')
+
+    if not config.sampling.override_algo_steps:
+        num_sampling_steps = model.config.algo.get('num_timesteps', None)
+    else:
+        num_sampling_steps = config.sampling.steps
+
+    puzzles = build_nqueens_eval_puzzles(n, num_puzzles, seed=config.seed)
+    logger.info(f'Evaluating {len(puzzles)} N-Queens puzzles, '
+                f'{num_samples} samples each (n={n}).')
+
+    output_dir = _resolve_nqueens_output_dir(config, ckpt_path)
+    os.makedirs(output_dir, exist_ok=True)
+
+    records = []
+    by_count = defaultdict(lambda: {'accuracy': [], 'coverage': []})
+    with torch.inference_mode():
+        for puzzle in tqdm(puzzles, desc='N-Queens eval'):
+            clue_board = np.asarray(puzzle['puzzle_board'])
+            completions = set(puzzle['completions'])
+            solution_count = puzzle['solution_count']
+
+            # Batch `num_samples` identical clue boards; only the clue queens are
+            # held clean, the rest is re-noised, so the samples differ.
+            board_t = torch.tensor(clue_board, dtype=torch.long, device='cuda')
+            input_ids = board_t.unsqueeze(0).repeat(num_samples, 1)
+            conditioning_mask = (input_ids == nq.QUEEN_ID)
+
+            generated = model.conditional_generate_samples(
+                input_ids, conditioning_mask, num_steps=num_sampling_steps)
+
+            num_correct = 0
+            found = set()
+            for row in generated.cpu().numpy():
+                cols = nq.board_to_cols(row, n)
+                if cols is not None and cols in completions:
+                    num_correct += 1
+                    found.add(cols)
+
+            accuracy = num_correct / num_samples
+            coverage = len(found) / max(solution_count, 1)
+            by_count[solution_count]['accuracy'].append(accuracy)
+            by_count[solution_count]['coverage'].append(coverage)
+            records.append({
+                'solution_count': solution_count,
+                'num_clues': len(puzzle['clue_cols']),
+                'num_samples': num_samples,
+                'num_correct': num_correct,
+                'num_distinct_found': len(found),
+                'accuracy': accuracy,
+                'coverage': coverage,
+            })
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
 def main(config):
@@ -394,6 +478,8 @@ def main(config):
         _generate_samples(**kwargs)
     elif config.mode == "sudoku_eval":
         _sudoku_eval(**kwargs)
+    elif config.mode == "nqueens_eval":
+        _nqueens_eval(**kwargs)
     else:
         _train(**kwargs, rank=RANK, world_size=WORLD_SIZE)
 
