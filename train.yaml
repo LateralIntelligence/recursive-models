@@ -60,4 +60,4 @@ setup: |
 run: |
   source ~/flm-env/bin/activate
   nvidia-smi
-  bash reproduce/sweep_flm_infill_sudoku_gen.sh
+  bash reproduce/sweep_infill_sudoku_gen.sh
