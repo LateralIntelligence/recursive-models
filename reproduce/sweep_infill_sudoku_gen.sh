@@ -39,9 +39,9 @@ cd "${REPO_ROOT}"
 
 # --- Sweep / run configuration (all overridable via env) --------------------
 # Training-set sizes to sweep (the deterministic subset size).
-read -r -a subset_sizes <<< "${SUBSET_SIZES:-1000 10000}"
+read -r -a subset_sizes <<< "${SUBSET_SIZES:-10000 1000}"
 
-DIFFICULTY="${DIFFICULTY:-easy}"          # easy / medium / hard
+DIFFICULTY="${DIFFICULTY:-hard}"          # easy / medium / hard
 # Shared generated pool size. Must be >= the largest subset size above; a subset
 # equal to this uses the full pool.
 NUM_TRAIN="${NUM_TRAIN:-10000}"
@@ -50,7 +50,7 @@ NUM_VALID="${NUM_VALID:-2000}"
 GLOBAL_BATCH="${GLOBAL_BATCH:-32}"
 MAX_STEPS="${MAX_STEPS:-160001}"
 VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-10000}"
-CKPT_EVERY="${CKPT_EVERY:-10000}"
+CKPT_EVERY="${CKPT_EVERY:-50000}"
 # Plain FLM has no discrete timestep grid, so sudoku generation uses this many
 # Euler steps (kept modest so the per-eval cost stays tractable).
 SAMPLING_STEPS="${SAMPLING_STEPS:-128}"
