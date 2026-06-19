@@ -210,6 +210,8 @@ def build_nqueens_eval_puzzles(n, num_puzzles, seed, clue_range=None,
     GRAM-style "# of possible solutions" x-axis). Puzzles are bucketed by
     completion count and drawn round-robin so the x-axis is populated across the
     whole range rather than dominated by whichever count is most frequent.
+
+    Important: have clue_range be the same as what you trained on!
     """
     clue_range = clue_range or _default_clue_range(n)
     _train_by_k, test_by_k = _partition_by_k(n, clue_range, seed, test_fraction)

@@ -698,6 +698,8 @@ def get_nqueens_dataset(config, mode, rank=0, world_size=1):
     infill_loss_region = getattr(config.data, "infill_loss_region", "fill")
     dataset = SudokuGeneratedDataset(splits[split], infill=infill,
                 infill_loss_region=infill_loss_region)
+    
+    # TODO: optionally add subsetting to the train dataset
     if world_size > 1:
         dataset = torch.utils.data.Subset(
             dataset, list(range(rank, len(dataset), world_size)))
@@ -792,6 +794,7 @@ def get_dataloaders(config, tokenizer, rank:int, world_size:int, skip_train=Fals
             valid_set,
             batch_size=None if is_iterable else config.loader.eval_batch_size,
             num_workers=config.loader.num_workers,
+            persistent_workers=config.loader.num_workers>0,
             pin_memory=config.loader.pin_memory,
             shuffle=False if is_iterable else (shuffle_valid and not config.data.streaming),
             generator=generator)

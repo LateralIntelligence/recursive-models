@@ -402,7 +402,7 @@ def _nqueens_eval(diffusion_model, config, tokenizer, logger):
 
     n = int(config.data.get('nqueens_n', 8))
     num_samples = int(config.eval.get('nqueens_num_samples', 20))
-    num_puzzles = int(config.eval.get('nqueens_num_puzzles', 200))
+    num_puzzles = int(config.eval.get('nqueens_num_puzzles', 200)) #TODO: should change default num of eval puzzles
     assert model.num_tokens == n * n, (
         f'model.length ({model.num_tokens}) must equal n*n ({n * n}); '
         f'set model=nqueens_infill with model.length={n * n}.')

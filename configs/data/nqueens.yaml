@@ -8,7 +8,7 @@ is_iterable: False
 train: nqueens
 valid: nqueens
 tokenizer_name_or_path: nqueens
-infill_loss_region: fill  # board/fill. fill = blanks only, board = full board
+infill_loss_region: board  # board/fill. fill = blanks only, board = full board
 cache_dir: ./cache
 wrap: False
 streaming: False
