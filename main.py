@@ -360,6 +360,19 @@ def _sudoku_eval(diffusion_model, config, tokenizer, logger):
         })
     return results
 
+
+def _resolve_nqueens_output_dir(config, ckpt):
+    """Where to drop per-run N-Queens eval records (mirrors the sudoku resolver)."""
+    stem = os.path.splitext(os.path.basename(ckpt))[0] if ckpt else 'eval'
+    override = config.eval.get('nqueens_output_dir', None)
+    if override:
+        return os.path.join(_resolve_against_original_cwd(override), stem)
+    if ckpt:
+        run_dir = os.path.dirname(os.path.dirname(ckpt))
+        return os.path.join(run_dir, 'nqueens_eval', stem)
+    return os.path.join(config.checkpointing.save_dir, 'nqueens_eval', stem)
+
+
 @L.pytorch.utilities.rank_zero_only
 @torch.no_grad()
 def _nqueens_eval(diffusion_model, config, tokenizer, logger):
@@ -389,7 +402,7 @@ def _nqueens_eval(diffusion_model, config, tokenizer, logger):
 
     n = int(config.data.get('nqueens_n', 8))
     num_samples = int(config.eval.get('nqueens_num_samples', 20))
-    num_puzzles = int(config.eval.get('nqueens_num_puzzles', 200))
+    num_puzzles = int(config.eval.get('nqueens_num_puzzles', 200)) #TODO: should change default num of eval puzzles
     assert model.num_tokens == n * n, (
         f'model.length ({model.num_tokens}) must equal n*n ({n * n}); '
         f'set model=nqueens_infill with model.length={n * n}.')
@@ -444,6 +457,47 @@ def _nqueens_eval(diffusion_model, config, tokenizer, logger):
                 'accuracy': accuracy,
                 'coverage': coverage,
             })
+
+    def _mean(xs):
+        return sum(xs) / len(xs) if xs else 0.0
+
+    per_count = {
+        str(c): {
+            'num_puzzles': len(v['accuracy']),
+            'accuracy': _mean(v['accuracy']),
+            'coverage': _mean(v['coverage']),
+        }
+        for c, v in sorted(by_count.items())
+    }
+    overall_accuracy = _mean([r['accuracy'] for r in records])
+    overall_coverage = _mean([r['coverage'] for r in records])
+    logger.info(
+        f'N-Queens overall accuracy={overall_accuracy:.4f} '
+        f'coverage={overall_coverage:.4f} over {len(records)} puzzles.')
+
+    results = {
+        'n': n,
+        'num_samples': num_samples,
+        'num_puzzles': len(records),
+        'overall_accuracy': overall_accuracy,
+        'overall_coverage': overall_coverage,
+        'checkpoint_path': config.eval.checkpoint_path,
+        'per_solution_count': per_count,   # x-axis aggregates for plotting
+        'records': records,
+    }
+    results_path = os.path.join(output_dir, 'results.json')
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    logger.info(f'N-Queens eval results saved to {results_path}')
+
+    if wandb.run is not None:
+        wandb.log({
+            'nqueens/accuracy': overall_accuracy,
+            'nqueens/coverage': overall_coverage,
+            'nqueens/num_puzzles': len(records),
+        })
+    return results
+
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
 def main(config):

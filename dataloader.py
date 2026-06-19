@@ -112,8 +112,11 @@ def get_tokenizer(config):
     elif config.data.tokenizer_name_or_path == "mnist":
         # Pixel space: token 0 = PAD/EMPTY, tokens 1/2 binary
         return IdentityTokenizer(vocab_size=3, pad_token_id=0)
+    elif config.data.tokenizer_name_or_path == "nqueens":
+        # Board space: token 0 = PAD, 1 = empty cell, 2 = queen.
+        return IdentityTokenizer(vocab_size=3, pad_token_id=0)
     else:
-        raise ValueError("Only data tokenizer names are 'sudoku-extreme' and 'mnist'")
+        raise ValueError("Only data tokenizer names are 'sudoku-extreme', 'mnist' and 'nqueens'")
 
 
 #### Dataset code ####
@@ -656,19 +659,68 @@ def get_sudoku_dataset(config, mode, rank=0, world_size=1):
             dataset, list(range(rank, len(dataset), world_size)))
     return dataset
 
-def get_dataset(dataset_name, 
+# Cache generated N-Queens splits (keyed by the params that affect generation)
+# so the separate train and valid calls reuse one deterministic generation.
+_NQUEENS_SPLIT_CACHE: Dict[tuple, dict] = {}
+
+
+def _build_nqueens_splits(config):
+    from dataset_code.generate_nqueens_dataset import generate_nqueens_dataset
+
+    data_cfg = config.data
+    n = int(getattr(data_cfg, "nqueens_n", 8))
+    num_train = int(data_cfg.num_train)
+    num_valid = int(data_cfg.num_valid)
+    key = (n, num_train, num_valid, config.seed)
+    if key in _NQUEENS_SPLIT_CACHE:
+        return _NQUEENS_SPLIT_CACHE[key]
+    LOGGER.info(
+        "Generating N-Queens dataset (n=%d, train=%d, valid=%d, seed=%d)",
+        n, num_train, num_valid, config.seed)
+    splits = generate_nqueens_dataset(
+        n=n, num_train=num_train, num_valid=num_valid, seed=config.seed)
+    _NQUEENS_SPLIT_CACHE[key] = splits
+    return splits
+
+
+def get_nqueens_dataset(config, mode, rank=0, world_size=1):
+    """Return a map-style generated N-Queens split.
+
+    Mirrors get_sudoku_dataset: examples are generated in-memory in the flat
+    [puzzle | solution] layout, then SudokuGeneratedDataset derives the infill
+    view (solution board + conditioning_mask over the clue queens). The token
+    convention (pad=0, empty=1, queen=2) makes the clue queens the only
+    non-pad/non-empty cells, so _infill_view marks exactly them as conditioning.
+    """
+    splits = _build_nqueens_splits(config)
+    split = "train" if mode == "train" else "validation"
+    infill = getattr(config.algo, "infill", False)
+    infill_loss_region = getattr(config.data, "infill_loss_region", "fill")
+    dataset = SudokuGeneratedDataset(splits[split], infill=infill,
+                infill_loss_region=infill_loss_region)
+    
+    # TODO: optionally add subsetting to the train dataset
+    if world_size > 1:
+        dataset = torch.utils.data.Subset(
+            dataset, list(range(rank, len(dataset), world_size)))
+    return dataset
+
+
+def get_dataset(dataset_name,
                 mode,
                 rank,
                 world_size,
                 config=None):
     if dataset_name in ("sudoku-extreme", "mnist"):
         dataset = get_puzzle_dataset(
-            config, rank, world_size 
-        )   
+            config, rank, world_size
+        )
         data = dataset[mode]
-        return data 
+        return data
     elif dataset_name == "sudoku":
         return get_sudoku_dataset(config, mode, rank, world_size)
+    elif dataset_name == "nqueens":
+        return get_nqueens_dataset(config, mode, rank, world_size)
     else:
         raise ValueError(f"Only valid dataset name is sudoku-extreme and mnist. Received {dataset_name}")
 
@@ -742,6 +794,7 @@ def get_dataloaders(config, tokenizer, rank:int, world_size:int, skip_train=Fals
             valid_set,
             batch_size=None if is_iterable else config.loader.eval_batch_size,
             num_workers=config.loader.num_workers,
+            persistent_workers=config.loader.num_workers>0,
             pin_memory=config.loader.pin_memory,
             shuffle=False if is_iterable else (shuffle_valid and not config.data.streaming),
             generator=generator)
