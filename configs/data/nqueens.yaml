@@ -1,0 +1,36 @@
+# Select with `data=nqueens` on the CLI.
+# N-Queens completion on an 8x8 board.
+# Layout per example: [ puzzle(64) | solution(64) ] -> length 128, then the
+# infill view (solution board + conditioning_mask over the clue queens) is
+# derived in the dataloader. Tokens: 0=pad, 1=empty, 2=queen.
+# Pair with `model=nqueens_infill` (length 64) and `algo.infill=true`.
+is_iterable: False
+train: nqueens
+valid: nqueens
+tokenizer_name_or_path: nqueens
+infill_loss_region: board  # board/fill. fill = blanks only, board = full board
+cache_dir: ./cache
+wrap: False
+streaming: False
+insert_train_eos: False
+insert_valid_eos: False
+
+data_paths: []
+data_paths_test: []
+
+eval_interval: 10_000
+
+# subset
+train_subset_n: null
+subset_seed: 0
+
+# Generation parameters (consumed by dataloader.get_nqueens_dataset).
+# Puzzles remove k in {5,6,7} queens (-> 1,2,3 clues kept), generated as an
+# equal split across k. Inputs are split 85:15 train/test by unique clue board
+# (the 15% test side is held out for the eval). num_train/num_valid are soft
+# caps on the total per split; the equal, by-input space for 8x8 is small
+# (single-clue puzzles are the bottleneck: ~558 per k -> ~1.7k train), so these
+# caps don't bind here -- train for more steps rather than more data.
+nqueens_n: 8
+num_train: 15000
+num_valid: 2000
