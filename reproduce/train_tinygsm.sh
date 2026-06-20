@@ -45,7 +45,7 @@ for cprob in "${conditioning_prob_clean_values[@]}"; do
     data=tinygsm \
     data.tokenizer_name_or_path="${TOKENIZER}" \
     data.wrap=False \
-    data.train_on_prompt=False \
+    data.train_on_prompt=True \
     data.train_on_pad=True \
     data.filter_too_long=True \
     model=tinygsm \

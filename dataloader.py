@@ -874,9 +874,12 @@ def _tiny_gsm_cache_dir(config, tokenizer_tag):
     Keyed by everything that affects the produced tensors so changing any of
     them yields a fresh cache. Anchored to original_cwd() so it is shared
     across hydra run dirs.
+
+    Note: if we give it an absolute directory (i.e /datasets/tinygsm). This will
+    become the root, not the original_cwd()
     """
     data_cfg = config.data
-    base = getattr(data_cfg, "gen_output_dir", "data/tinygsm")
+    base = getattr(data_cfg, "gen_output_dir", "/datasets/tinygsm")
     mask_tag = "full" if data_cfg.train_on_prompt else "answer_only"
     pad_tag = "_train_on_pad" if data_cfg.train_on_pad else ""
     filt_tag = "_filtered" if data_cfg.filter_too_long else ""

@@ -1,0 +1,50 @@
+# precompute_tinygsm.yaml
+name: tinygsm-precompute
+resources:
+  infra: aws            # CPU boxes are cheap/abundant here, same cloud as S3
+  instance_type: c5.12xlarge             # or pin: instance_type: c7i.24xlarge
+  memory: 96+
+  disk_size: 256        # raw download + cache + rclone VFS cache
+  disk_tier: best
+  use_spot: false       # one-shot, restartable → take the discount
+workdir: .
+file_mounts:
+  /datasets:
+    name: lateral-intelligence-datasets
+    store: s3
+    mode: MOUNT_CACHED
+    type: DATASET_RW
+setup: |
+  set -e
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  # uv venv ~/flm-env --python 3.11 --seed
+  source ~/flm-env/bin/activate
+  # lean CPU env — DO NOT install flash-attn / CUDA deps here.
+  # tokenization needs torch (cpu), tokenizers, datasets, hydra only.
+  # uv pip install -r requirements.txt
+  # uv pip install 'fsspec>=2025.5.0'
+  ln -sfn /outputs ~/sky_workdir/outputs
+
+
+run: |
+  source ~/flm-env/bin/activate
+  export TOKENIZERS_PARALLELISM=false   # avoid fork-after-parallelism deadlock
+  python precompute_gsm.py \
+    data=tinygsm \
+    data.tokenizer_name_or_path=HuggingFaceTB/SmolLM-135M \
+    data.gen_output_dir=/datasets/tinygsm \
+    data.wrap=False \
+    data.train_on_prompt=True \
+    data.train_on_pad=True \
+    data.filter_too_long=True \
+    model=tinygsm \
+    model.length=512 \
+    algo=flm \
+    algo.infill=true \
+    algo.diffusion_forcing=true \
+    algo.conditioning_time_random=true \
+    algo.conditioning_prob_clean=1.0 \
+    loader.global_batch_size=512 \
+    loader.batch_size=64 \
+    loader.num_workers=48 \

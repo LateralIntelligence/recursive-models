@@ -1,0 +1,63 @@
+name: flm-infill-gsm8k
+
+resources:
+  infra: lambda #aws
+  accelerators: A100:1          # ~$1/hr. NOT A100:1 — that's an 8×A100 box on AWS
+  #disk_tier: best               # fast NVMe to back the MOUNT_CACHED cache
+
+workdir: .                      # code only; outputs/ is .gitignore'd, won't sync
+
+file_mounts:
+  /datasets:
+    name: lateral-intelligence-datasets   # globally unique; SkyPilot creates it
+    store: s3
+    mode: MOUNT_CACHED
+    type: DATASET_RO                # pre-tuned for bursty checkpoint writes
+  /outputs:
+    name: lateral-intelligence-ckpts-gsm8k   # globally unique; SkyPilot creates it
+    store: s3
+    mode: MOUNT_CACHED
+    type: MODEL_CHECKPOINT_RW     
+
+envs:
+  #WANDB_MODE: offline           # smoke test: no wandb auth needed (else init can hang)
+  # --- smoke values: one run, checkpoints at step 100 & 200 ---
+  #DIFFICULTY: easy
+  #SUBSET_SIZES: "100"
+  #CONDITIONING_PROBS_CLEAN: "1.0"
+  DATA: "nqueens-10"
+  N: "10"
+  MODEL_LENGTH: "100"
+  CONDITIONING_PROBS_CLEAN: 0.2
+  # --- real sweep: SUBSET_SIZES "10000 1000", CONDITIONING_PROBS_CLEAN "0.2 0.5 1.0",
+  #     NUM_TRAIN 10000, MAX_STEPS 160001, CKPT_EVERY 50000, SAMPLING_STEPS 128, DIFFICULTY hard
+
+secrets:
+  WANDB_API_KEY: null
+
+setup: |
+  set -e
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv venv ~/flm-env --python 3.11 --seed
+  source ~/flm-env/bin/activate
+
+  # 1) torch first — flash-attn needs it present to install
+  uv pip install torch==2.8.0
+  uv pip install numpy==2.3.2
+
+  # 2) prebuilt flash-attn wheel matching torch's C++ ABI — no compile
+  ABI=$(python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')")
+  uv pip install "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abi${ABI}-cp311-cp311-linux_x86_64.whl"
+
+  # 3) the rest — flash-attn already satisfied, so nothing builds
+  uv pip install -r requirements.txt
+  uv pip install 'fsspec>=2025.5.0'
+
+  ln -sfn /outputs ~/sky_workdir/outputs
+
+
+run: |
+  source ~/flm-env/bin/activate
+  nvidia-smi
+  bash reproduce/train_tinygsm.sh

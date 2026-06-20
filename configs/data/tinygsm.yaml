@@ -27,14 +27,14 @@ hf_dataset_name: TinyGSM/TinyGSM
 question_key: question
 answer_key: code
 separator: "\n"
-train_on_prompt: False   # True -> no conditioning tokens
+train_on_prompt: True   # True -> loss also computed on prompt tokens. Prompt are always conditioning tokens 
 train_on_pad: True       # extend the loss over the padding region
 filter_too_long: True    # drop examples longer than model.length (no wrapping)
 val_ratio: 0.01
 val_seed: 42
 
 # Where the tokenized/padded tensors are cached on disk.
-gen_output_dir: data/tinygsm
+gen_output_dir: /datasets/tinygsm
 
 # Optional train subset (deterministic, independent of training seed).
 train_subset_n: null
