@@ -104,17 +104,90 @@ class IdentityTokenizer:
         if torch.is_tensor(sample):
             sample = sample.tolist()
         return ''.join(str(c) for c in sample)
+    
+class VocabSizeTokenizerWrapper:
+    def __init__(self, tokenizer):
+        object.__setattr__(self, '_tokenizer', tokenizer)
+
+    def _wrapped(self):
+        return object.__getattribute__(self, '_tokenizer')
+
+    @property
+    def vocab_size(self):
+        return len(self._wrapped())
+
+    def __len__(self):
+        return len(self._wrapped())
+
+    def __call__(self, *args, **kwargs):
+        return self._wrapped()(*args, **kwargs)
+
+    def __getattr__(self, name):
+        if name == '_tokenizer':
+            raise AttributeError(name)
+        return getattr(self._wrapped(), name)
+
+    def __setattr__(self, name, value):
+        if name == '_tokenizer':
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._wrapped(), name, value)
+
+    def __repr__(self):
+        return f'Wrapped<{self._wrapped()}>'
 
 
 def get_tokenizer(config):
-    if config.data.tokenizer_name_or_path in ("sudoku-extreme", "sudoku"):
+    name = config.data.tokenizer_name_or_path
+    if name in ("sudoku-extreme", "sudoku"):
         return IdentityTokenizer(vocab_size=11, pad_token_id=0)
-    elif config.data.tokenizer_name_or_path == "mnist":
+    elif name == "mnist":
         # Pixel space: token 0 = PAD/EMPTY, tokens 1/2 binary
         return IdentityTokenizer(vocab_size=3, pad_token_id=0)
-    elif config.data.tokenizer_name_or_path == "nqueens":
+    elif name == "nqueens":
         # Board space: token 0 = PAD, 1 = empty cell, 2 = queen.
         return IdentityTokenizer(vocab_size=3, pad_token_id=0)
+    elif name == "HuggingFaceTB/SmolLM-135M":
+        # Real HF tokenizer (tinygsm, e.g. SmolLM-135M).
+        tokenizer = transformers.AutoTokenizer.from_pretrained(name)
+        if (isinstance(tokenizer, transformers.GPT2TokenizerFast)
+            or isinstance(tokenizer, transformers.GPT2Tokenizer)):
+            tokenizer._tokenizer.post_processor = tokenizers.processors.BertProcessing(
+            (tokenizer.bos_token, tokenizer.bos_token_id),
+            (tokenizer.eos_token, tokenizer.eos_token_id))
+
+        # For wrapped batches:
+        #  [BOS] sent1 [EOS] sent2-fragment [EOS]
+        #  [BOS] sent2-fragment [EOS] sent3 [EOS]
+        if tokenizer.bos_token is None:
+            if tokenizer.cls_token is not None:
+                tokenizer.bos_token = tokenizer.cls_token
+            elif tokenizer.eos_token is not None:
+                tokenizer.bos_token = tokenizer.eos_token
+            else:
+                raise AttributeError(
+                    'Tokenizer must have a bos_token, cls_token, '
+                    f'or eos_token: {tokenizer}')
+        if tokenizer.eos_token is None:
+            if tokenizer.sep_token is None:
+                raise AttributeError(
+                    'Tokenizer must have a eos_token '
+                    f'or sep_token: {tokenizer}')
+            tokenizer.eos_token = tokenizer.sep_token
+        if tokenizer.pad_token is None:
+            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+
+        # A mask token must be distinct from BOS/EOS/PAD. If a tokenizer reuses
+        # one of those ids for `mask_token`, disable the mask role entirely.
+        if getattr(tokenizer, 'mask_token_id', None) in {
+            tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id}:
+            tokenizer.mask_token = None
+
+        wrap_tokenizer = name not in (
+            'gpt2', 'bert-base-uncased', 'synthetic', 'text8')
+        if wrap_tokenizer:
+            tokenizer = VocabSizeTokenizerWrapper(tokenizer)
+        return tokenizer
     else:
         raise ValueError("Only data tokenizer names are 'sudoku-extreme', 'mnist' and 'nqueens'")
 
@@ -706,11 +779,266 @@ def get_nqueens_dataset(config, mode, rank=0, world_size=1):
     return dataset
 
 
+# TinyGSM (grade-school math) -- a *text* benchmark.
+#
+# Follows the data procedure from https://github.com/jdeschena/s-flm: each
+# example is laid out as ``[BOS] question <sep> answer [EOS]`` and padded to
+# ``model.length``. The crucial difference from the puzzle datasets is that the
+# tokens come from a real HuggingFace tokenizer (SmolLM-135M by default) rather
+# than an IdentityTokenizer.
+#
+# We reuse the existing FLM *infill* machinery (input_ids + conditioning_mask +
+# valid_tokens), so the benchmark plugs straight into the FLM algo:
+#   - conditioning_mask: 1 over the PROMPT (question) tokens. These are the
+#     tokens s-flm keeps clean. Here they are the ones the prompt-noising
+#     experiment may corrupt -- controlled entirely by
+#     ``algo.conditioning_prob_clean`` via TrainerBase._sample_clean_mask, so no
+#     algo changes are needed.
+#   - valid_tokens: 1 over the loss region (the answer, plus padding when
+#     ``data.train_on_pad`` is set), exactly the s-flm attention_mask.
+# ---------------------------------------------------------------------------
+_TINYGSM_SPLIT_CACHE: Dict[tuple, dict] = {}
+_TINYGSM_SPLITS = ("train", "validation")
+_TINYGSM_FIELDS = ("input_ids", "valid_tokens", "conditioning_mask")
+
+
+def _tiny_gsm_pad_and_mask(ids, prompt_len, block_size, train_on_prompt,
+                           train_on_pad, eos_id, pad_id):
+    """Pad one tokenized example to ``block_size`` and build its masks.
+
+    Pure (no tokenizer / IO) so it can be unit-tested offline. Mirrors the
+    ``pad_and_mask`` logic in s-flm's dataloader.
+
+    Args:
+        ids: list[int], the full ``[BOS] q <sep> a [EOS]`` token ids.
+        prompt_len: number of leading prompt tokens (``1 + |q| + |sep|``).
+        block_size: target sequence length.
+        train_on_prompt: if True the loss also covers the prompt. Conditioning tokens are always
+        the prompt. If False, the loss is only on the answer.
+
+        train_on_pad: if True the loss extends over the padding region too.
+        eos_id, pad_id: token ids used for truncation / padding.
+
+    Returns:
+        (input_ids, valid_tokens, conditioning_mask), each a list of length
+        ``block_size``. valid_tokens marks the loss region; conditioning_mask
+        marks the prompt tokens kept clean
+    """
+    n = len(ids)
+    if n >= block_size:
+        ids = ids[:block_size - 1] + [eos_id]
+        n_eff = block_size
+    else:
+        ids = ids + [pad_id] * (block_size - n)
+        n_eff = n
+
+    mask_start = 0 if train_on_prompt else min(prompt_len, block_size)
+    mask_end = block_size if train_on_pad else min(n_eff, block_size)
+    valid_tokens = ([0] * mask_start
+                    + [1] * (mask_end - mask_start)
+                    + [0] * (block_size - mask_end))
+
+    p = min(prompt_len, block_size)
+    conditioning_mask = [1] * p + [0] * (block_size - p)
+    return ids, valid_tokens, conditioning_mask
+
+
+class TinyGSMDataset(torch.utils.data.Dataset):
+    """Map-style dataset over tokenized TinyGSM examples.
+
+    Each item is ``{input_ids, valid_tokens, conditioning_mask}`` with the
+    layout produced by ``_tiny_gsm_pad_and_mask`` -- the same field contract the
+    FLM infill path consumes for sudoku / N-Queens.
+    """
+
+    def __init__(self, data):
+        self.input_ids = data["input_ids"]
+        self.valid_tokens = data["valid_tokens"]
+        self.conditioning_mask = data["conditioning_mask"]
+
+    def __len__(self):
+        return len(self.input_ids)
+
+    def __getitem__(self, idx):
+        return {
+            "input_ids": torch.tensor(self.input_ids[idx], dtype=torch.long),
+            "valid_tokens": torch.tensor(self.valid_tokens[idx], dtype=torch.long),
+            "conditioning_mask": torch.tensor(
+                self.conditioning_mask[idx], dtype=torch.long),
+        }
+
+
+def _tiny_gsm_cache_dir(config, tokenizer_tag):
+    """Deterministic on-disk location for a given tokenization config.
+
+    Keyed by everything that affects the produced tensors so changing any of
+    them yields a fresh cache. Anchored to original_cwd() so it is shared
+    across hydra run dirs.
+    """
+    data_cfg = config.data
+    base = getattr(data_cfg, "gen_output_dir", "data/tinygsm")
+    mask_tag = "full" if data_cfg.train_on_prompt else "answer_only"
+    pad_tag = "_train_on_pad" if data_cfg.train_on_pad else ""
+    filt_tag = "_filtered" if data_cfg.filter_too_long else ""
+    name = (f"bs{config.model.length}_{mask_tag}{pad_tag}{filt_tag}"
+            f"_val{data_cfg.val_ratio}_seed{data_cfg.val_seed}_{tokenizer_tag}")
+    return os.path.join(original_cwd(), base, name)
+
+
+def _tiny_gsm_disk_complete(cache_dir):
+    return all(
+        os.path.exists(os.path.join(cache_dir, f"{split}__{field}.npy"))
+        for split in _TINYGSM_SPLITS
+        for field in _TINYGSM_FIELDS)
+
+
+def _load_tiny_gsm_from_disk(cache_dir):
+    splits = {}
+    for split in _TINYGSM_SPLITS:
+        splits[split] = {
+            field: np.load(os.path.join(cache_dir, f"{split}__{field}.npy"),
+                           mmap_mode="r")
+            for field in _TINYGSM_FIELDS
+        }
+    return splits
+
+
+def _save_tiny_gsm_to_disk(cache_dir, splits):
+    parent = os.path.dirname(cache_dir) or "."
+    os.makedirs(parent, exist_ok=True)
+    tmp_dir = f"{cache_dir}.tmp.{os.getpid()}"
+    os.makedirs(tmp_dir, exist_ok=True)
+    try:
+        for split in _TINYGSM_SPLITS:
+            # Token ids fit in int32; masks are 0/1.
+            np.save(os.path.join(tmp_dir, f"{split}__input_ids.npy"),
+                    np.asarray(splits[split]["input_ids"], dtype=np.int32))
+            np.save(os.path.join(tmp_dir, f"{split}__valid_tokens.npy"),
+                    np.asarray(splits[split]["valid_tokens"], dtype=np.uint8))
+            np.save(os.path.join(tmp_dir, f"{split}__conditioning_mask.npy"),
+                    np.asarray(splits[split]["conditioning_mask"], dtype=np.uint8))
+        os.replace(tmp_dir, cache_dir)
+    finally:
+        if os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _build_tiny_gsm_splits(config, tokenizer):
+    """Tokenize, pad and split TinyGSM, caching the result to disk."""
+    data_cfg = config.data
+    block_size = int(config.model.length)
+    tokenizer_tag = str(data_cfg.tokenizer_name_or_path).replace('/', '__')
+    key = (block_size, bool(data_cfg.train_on_prompt),
+           bool(data_cfg.train_on_pad), bool(data_cfg.filter_too_long),
+           float(data_cfg.val_ratio), int(data_cfg.val_seed), tokenizer_tag)
+    if key in _TINYGSM_SPLIT_CACHE:
+        return _TINYGSM_SPLIT_CACHE[key]
+
+    cache_dir = _tiny_gsm_cache_dir(config, tokenizer_tag)
+    if _tiny_gsm_disk_complete(cache_dir):
+        LOGGER.info("Loading cached TinyGSM dataset from %s", cache_dir)
+        splits = _load_tiny_gsm_from_disk(cache_dir)
+        _TINYGSM_SPLIT_CACHE[key] = splits
+        return splits
+
+    LOGGER.info(
+        "Preparing TinyGSM dataset (block_size=%d, train_on_prompt=%s, "
+        "train_on_pad=%s, filter_too_long=%s) -> caching to %s",
+        block_size, data_cfg.train_on_prompt, data_cfg.train_on_pad,
+        data_cfg.filter_too_long, cache_dir)
+
+    ds = datasets.load_dataset(
+        getattr(data_cfg, "hf_dataset_name", "TinyGSM/TinyGSM"),
+        split="train", cache_dir=getattr(data_cfg, "cache_dir", None))
+
+    bos_id = tokenizer.bos_token_id
+    eos_id = tokenizer.eos_token_id
+    pad_id = tokenizer.pad_token_id
+    assert bos_id is not None and eos_id is not None and pad_id is not None
+    
+    sep_ids = tokenizer(data_cfg.separator, add_special_tokens=False).input_ids
+    question_key = getattr(data_cfg, "question_key", "question")
+    answer_key = getattr(data_cfg, "answer_key", "code")
+    train_on_prompt = bool(data_cfg.train_on_prompt)
+    train_on_pad = bool(data_cfg.train_on_pad)
+    num_proc = getattr(config.loader, "num_workers", 1) or 1
+
+    def tokenize_qa(example):
+        q_ids = tokenizer(example[question_key].strip(),
+                          add_special_tokens=False).input_ids
+        a_ids = tokenizer(str(example[answer_key]).strip(),
+                          add_special_tokens=False).input_ids
+        ids = [bos_id] + q_ids + sep_ids + a_ids + [eos_id]
+        prompt_len = 1 + len(q_ids) + len(sep_ids)
+        return {"ids": ids, "prompt_len": prompt_len, "n": len(ids)}
+
+    tokenized = ds.map(
+        tokenize_qa, remove_columns=ds.column_names,
+        num_proc=num_proc, desc="Tokenizing TinyGSM")
+
+    if data_cfg.filter_too_long:
+        before = len(tokenized)
+        tokenized = tokenized.filter(
+            lambda x: x["n"] <= block_size,
+            num_proc=num_proc, desc="Filtering too-long examples")
+        LOGGER.info("Filtered TinyGSM: %d -> %d (%d removed)",
+                    before, len(tokenized), before - len(tokenized))
+
+    def pad_and_mask(example):
+        ids, valid, cond = _tiny_gsm_pad_and_mask(
+            example["ids"], example["prompt_len"], block_size,
+            train_on_prompt, train_on_pad, eos_id, pad_id)
+        return {"input_ids": ids, "valid_tokens": valid,
+                "conditioning_mask": cond}
+
+    tokenized = tokenized.map(
+        pad_and_mask, remove_columns=tokenized.column_names,
+        num_proc=num_proc, desc="Padding TinyGSM")
+
+    tmp = tokenized.train_test_split(
+        test_size=float(data_cfg.val_ratio), seed=int(data_cfg.val_seed))
+    splits = {
+        "train": {f: np.asarray(tmp["train"][f]) for f in _TINYGSM_FIELDS},
+        "validation": {f: np.asarray(tmp["test"][f]) for f in _TINYGSM_FIELDS},
+    }
+    _save_tiny_gsm_to_disk(cache_dir, splits)
+    _TINYGSM_SPLIT_CACHE[key] = splits
+    return splits
+
+
+def get_tiny_gsm_dataset(config, tokenizer, mode, rank=0, world_size=1):
+    """Return a map-style TinyGSM split, mirroring get_sudoku_dataset.
+
+    Emits {input_ids, valid_tokens, conditioning_mask}; the prompt is the
+    conditioning region (optionally noised via algo.conditioning_prob_clean).
+    """
+    assert tokenizer is not None, "TinyGSM requires a HuggingFace tokenizer"
+    splits = _build_tiny_gsm_splits(config, tokenizer)
+    split = "train" if mode == "train" else "validation"
+    dataset = TinyGSMDataset(splits[split])
+
+    if mode == "train":
+        subset_n = getattr(config.data, "train_subset_n", None)
+        if subset_n is not None and 0 < subset_n < len(dataset):
+            subset_seed = getattr(config.data, "subset_seed", 0)
+            indices = _deterministic_subset_indices(
+                len(dataset), subset_n, subset_seed)
+            LOGGER.info(
+                "subsetting TinyGSM train split to %d/%d examples",
+                subset_n, len(dataset))
+            dataset = torch.utils.data.Subset(dataset, indices)
+
+    if world_size > 1:
+        dataset = torch.utils.data.Subset(
+            dataset, list(range(rank, len(dataset), world_size)))
+    return dataset
+
 def get_dataset(dataset_name,
                 mode,
                 rank,
                 world_size,
-                config=None):
+                config=None,
+                tokenizer=None):
     if dataset_name in ("sudoku-extreme", "mnist"):
         dataset = get_puzzle_dataset(
             config, rank, world_size
@@ -721,6 +1049,8 @@ def get_dataset(dataset_name,
         return get_sudoku_dataset(config, mode, rank, world_size)
     elif dataset_name == "nqueens":
         return get_nqueens_dataset(config, mode, rank, world_size)
+    elif dataset_name == "tinygsm":
+        return get_tiny_gsm_dataset(config, tokenizer, mode, rank, world_size)
     else:
         raise ValueError(f"Only valid dataset name is sudoku-extreme and mnist. Received {dataset_name}")
 
@@ -754,7 +1084,8 @@ def get_dataloaders(config, tokenizer, rank:int, world_size:int, skip_train=Fals
             mode='train',
             config=config,
             rank=rank,
-            world_size=world_size)
+            world_size=world_size,
+            tokenizer=tokenizer)
     
     validation_split = 'test'
     if skip_valid:
@@ -765,7 +1096,8 @@ def get_dataloaders(config, tokenizer, rank:int, world_size:int, skip_train=Fals
             mode=validation_split,
             config=config,
             rank=rank,
-            world_size=world_size
+            world_size=world_size,
+            tokenizer=tokenizer
         )
     
     if skip_train:

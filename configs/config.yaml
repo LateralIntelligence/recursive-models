@@ -81,7 +81,7 @@ eval:
 
   # N-Queens eval (mode=nqueens_eval).
   nqueens_output_dir: null      # null -> next to the evaluated checkpoint
-  nqueens_num_puzzles: 200      # number of eval puzzles (stratified by #solutions)
+  nqueens_num_puzzles: 750      # number of eval puzzles (stratified by #solutions)
   nqueens_num_samples: 20       # stochastic samples per puzzle for accuracy/coverage
 
 

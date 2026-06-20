@@ -1,0 +1,14 @@
+# DiT for TinyGSM text (FLM default). Mirrors s-flm's `small-flm`
+# (hidden 768, 12 blocks, 12 heads); `length` is the block size and the
+# vocab size is taken from the HuggingFace tokenizer at runtime.
+name: tinygsm
+type: ddit
+hidden_size: 768
+cond_dim: 128
+length: 512
+n_blocks: 12
+n_heads: 12
+scale_by_sigma: True
+dropout: 0.1
+tie_word_embeddings: False
+vocab_lookup: True

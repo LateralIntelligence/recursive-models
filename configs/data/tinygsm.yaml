@@ -1,0 +1,46 @@
+# Select with `data=tinygsm` on the CLI.
+#
+# TinyGSM grade-school-math benchmark, prepared as in
+# https://github.com/jdeschena/s-flm. Each example is
+#   [BOS] question <sep> answer [EOS]
+# padded to `model.length`. Tokenized with a real HuggingFace tokenizer
+# (SmolLM-135M by default), unlike the IdentityTokenizer puzzle datasets.
+#
+# The dataloader emits {input_ids, valid_tokens, conditioning_mask}:
+#   - conditioning_mask = prompt (question) tokens, kept clean by default.
+#     These are the tokens our prompt-noising experiment may corrupt; the
+#     probability is `algo.conditioning_prob_clean` (1.0 == s-flm's clean
+#     prompt). Requires `algo.infill: true` (the default flm algo).
+#   - valid_tokens = loss region = answer (+ padding when train_on_pad).
+is_iterable: False
+train: tinygsm
+valid: tinygsm
+tokenizer_name_or_path: HuggingFaceTB/SmolLM-135M
+cache_dir: ./cache
+wrap: False
+streaming: False
+insert_train_eos: True
+insert_valid_eos: True
+
+# TinyGSM-specific preparation knobs (match s-flm flm_default).
+hf_dataset_name: TinyGSM/TinyGSM
+question_key: question
+answer_key: code
+separator: "\n"
+train_on_prompt: False   # True -> no conditioning tokens
+train_on_pad: True       # extend the loss over the padding region
+filter_too_long: True    # drop examples longer than model.length (no wrapping)
+val_ratio: 0.01
+val_seed: 42
+
+# Where the tokenized/padded tensors are cached on disk.
+gen_output_dir: data/tinygsm
+
+# Optional train subset (deterministic, independent of training seed).
+train_subset_n: null
+subset_seed: 0
+
+data_paths: []
+data_paths_test: []
+
+eval_interval: 10_000

@@ -17,6 +17,9 @@ import algo
 import dataloader
 import utils
 from tqdm import tqdm 
+from collections import defaultdict
+from dataset_code import nqueens_common as nq
+from dataset_code.generate_nqueens_dataset import build_nqueens_eval_puzzles
 
 import numpy as np
 from datetime import datetime
@@ -387,9 +390,6 @@ def _nqueens_eval(diffusion_model, config, tokenizer, logger):
     are written to results.json; aggregates are logged to wandb.
     NOTE: uses the model ckpt's saved config for sampling steps, like sudoku eval.
     """
-    from collections import defaultdict
-    from dataset_code import nqueens_common as nq
-    from dataset_code.generate_nqueens_dataset import build_nqueens_eval_puzzles
 
     logger.info('Starting N-Queens eval.')
     assert config.eval.checkpoint_path, \
