@@ -16,7 +16,7 @@ is_iterable: False
 train: tinygsm
 valid: tinygsm
 tokenizer_name_or_path: HuggingFaceTB/SmolLM-135M
-cache_dir: ./cache
+cache_dir: /tmp/hf_datasets_cache
 wrap: False
 streaming: False
 insert_train_eos: True

@@ -1,0 +1,33 @@
+# Select with `data=gsm8k-test` (used by mode=gsm8k_eval).
+#
+# The actual GSM8K benchmark test set, used to score a model trained on
+# TinyGSM. Mirrors s-flm's gsm8k-test data config. Each example is the prompt
+#   [BOS] question <sep>
+# and the model generates Python code defining `simple_math_problem`, which
+# sandbox_gsm8k.evaluate_samples executes and compares to the gold answer.
+#
+# The separator MUST match the training config (configs/data/tinygsm.yaml),
+# otherwise the eval prompt is tokenized differently than training.
+is_iterable: False
+train: gsm8k_test
+valid: gsm8k_test
+tokenizer_name_or_path: HuggingFaceTB/SmolLM-135M
+cache_dir: ./cache
+wrap: False
+streaming: False
+insert_train_eos: True
+insert_valid_eos: True
+
+separator: '\n'   # literal backslash-n, must match tinygsm training
+
+# Source: local JSON (records with `prompt` + `response_ground_truth`) if set,
+# else the HuggingFace GSM8K test split below.
+data_path: null
+hf_test_name: openai/gsm8k
+hf_test_config: main
+hf_test_split: test
+
+data_paths: []
+data_paths_test: []
+
+eval_interval: 10_000

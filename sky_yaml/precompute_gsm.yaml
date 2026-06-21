@@ -18,13 +18,12 @@ setup: |
   set -e
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
-  # uv venv ~/flm-env --python 3.11 --seed
+  uv venv ~/flm-env --python 3.11 --seed
   source ~/flm-env/bin/activate
   # lean CPU env — DO NOT install flash-attn / CUDA deps here.
   # tokenization needs torch (cpu), tokenizers, datasets, hydra only.
-  # uv pip install -r requirements.txt
-  # uv pip install 'fsspec>=2025.5.0'
-  ln -sfn /outputs ~/sky_workdir/outputs
+  uv pip install -r requirements.txt
+  uv pip install 'fsspec>=2025.5.0'
 
 
 run: |
@@ -47,4 +46,4 @@ run: |
     algo.conditioning_prob_clean=1.0 \
     loader.global_batch_size=512 \
     loader.batch_size=64 \
-    loader.num_workers=48 \
+    loader.num_workers=48

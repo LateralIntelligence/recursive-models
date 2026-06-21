@@ -84,6 +84,14 @@ eval:
   nqueens_num_puzzles: 750      # number of eval puzzles (stratified by #solutions)
   nqueens_num_samples: 20       # stochastic samples per puzzle for accuracy/coverage
 
+# GSM8K eval (mode=gsm8k_eval): generate code for each test prompt, execute it
+# in sandbox_gsm8k, and score against the gold answer. Mirrors s-flm's gsm8k cfg.
+gsm8k:
+  output_dir: null          # null -> next to the evaluated checkpoint (gsm8k_eval/<ckpt>)
+  timeout: 5.0              # per-sample wall-clock exec budget (seconds)
+  bootstrap_size: 0          # >1 -> report bootstrapped 95% CI over the test set
+  max_batches: -1            # -1 -> full test set; >0 -> cap batches (debug)
+
 
 optim:
   weight_decay: 0
