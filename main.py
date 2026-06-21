@@ -15,6 +15,7 @@ from torch.distributed import init_process_group, destroy_process_group
 import wandb
 import algo
 import dataloader
+import sandbox_gsm8k
 import utils
 from tqdm import tqdm 
 from collections import defaultdict
@@ -498,15 +499,138 @@ def _nqueens_eval(diffusion_model, config, tokenizer, logger):
         })
     return results
 
+def _resolve_gsm8k_output_dir(config, ckpt):
+    """Where to drop GSM8K eval records (mirrors the sudoku/nqueens resolvers)."""
+    stem = os.path.splitext(os.path.basename(ckpt))[0] if ckpt else 'eval'
+    override = config.gsm8k.get('output_dir', None)
+    if override:
+        return os.path.join(_resolve_against_original_cwd(override), stem)
+    if ckpt:
+        run_dir = os.path.dirname(os.path.dirname(ckpt))
+        return os.path.join(run_dir, 'gsm8k_eval', stem)
+    return os.path.join(config.checkpointing.save_dir, 'gsm8k_eval', stem)
+
+@L.pytorch.utilities.rank_zero_only
+@torch.no_grad()
+def _gsm8k_eval(diffusion_model, config, tokenizer, logger):
+    """Score a TinyGSM-trained model on the GSM8K test benchmark.
+
+    For each test prompt we conditionally generate the answer region (the model
+    emits Python code defining ``simple_math_problem``), decode it, execute it in
+    ``sandbox_gsm8k``, and compare the returned number to the gold answer.
+    Per-example records and the aggregate accuracy (optionally with a
+    bootstrapped 95% CI) are written to ``results.json``. Mirrors the s-flm
+    GSM8K eval, adapted to our full-length infill generation API.
+    """
+    logger.info('Starting GSM8K eval.')
+    assert config.eval.checkpoint_path, \
+        'config.eval.checkpoint_path must be set for gsm8k_eval'
+    ckpt_path = _resolve_against_original_cwd(config.eval.checkpoint_path)
+
+    model = diffusion_model.load_from_checkpoint(
+        ckpt_path, tokenizer=tokenizer, weights_only=False).to('cuda')
+    model._eval_mode()  # applies EMA weights unless config.eval.disable_ema
+
+    dataset = dataloader.get_gsm8k_test_dataset(config, tokenizer)
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=config.loader.eval_batch_size,
+        num_workers=config.loader.num_workers,
+        pin_memory=config.loader.pin_memory,
+        shuffle=False)
+
+    if not config.sampling.override_algo_steps:
+        num_sampling_steps = model.config.algo.get('num_timesteps', None)
+    else:
+        num_sampling_steps = config.sampling.steps
+
+    output_dir = _resolve_gsm8k_output_dir(config, ckpt_path)
+    os.makedirs(output_dir, exist_ok=True)
+
+    records = []
+    total_batches = 0
+    with torch.inference_mode():
+        for batch in tqdm(loader, desc='GSM8K eval'):
+            if (config.gsm8k.max_batches > 0
+                    and total_batches >= config.gsm8k.max_batches):
+                break
+            input_ids = batch['input_ids'].cuda()
+            conditioning_mask = batch['conditioning_mask'].cuda().bool()
+            prompt_len = batch['prompt_len']
+
+            generated = model.conditional_generate_samples(
+                input_ids, conditioning_mask, num_steps=num_sampling_steps)
+
+            B = input_ids.shape[0]
+            for i in range(B):
+                p = int(prompt_len[i])
+                response = tokenizer.decode(
+                    generated[i, p:].cpu().tolist(), skip_special_tokens=True)
+                records.append({
+                    'prompt': batch['prompt'][i],
+                    'response_ground_truth': batch['response_ground_truth'][i],
+                    'response': response,
+                })
+            total_batches += 1
+
+    per_sample_correct = np.array([
+        int(sandbox_gsm8k.evaluate_samples(
+            rec['response'], rec['response_ground_truth'],
+            timeout_s=config.gsm8k.timeout))
+        for rec in records], dtype=np.int32)
+    correct = int(per_sample_correct.sum())
+    total = len(records)
+
+    if config.gsm8k.bootstrap_size > 1 and total > 0:
+        rng = np.random.default_rng(config.seed)
+        idx = rng.integers(0, total, size=(config.gsm8k.bootstrap_size, total))
+        boot_acc = per_sample_correct[idx].mean(axis=1)
+        acc = float(boot_acc.mean())
+        acc_se = float(boot_acc.std(ddof=1))
+        acc_ci_lo = float(np.percentile(boot_acc, 2.5))
+        acc_ci_hi = float(np.percentile(boot_acc, 97.5))
+        logger.info(
+            f'GSM8K accuracy: {acc * 100:.2f}% '
+            f'[{acc_ci_lo * 100:.2f}%, {acc_ci_hi * 100:.2f}%] (95% CI) '
+            f'({correct}/{total}, bootstrap N={config.gsm8k.bootstrap_size})')
+    else:
+        acc = correct / max(total, 1)
+        acc_se = 0.0
+        acc_ci_lo = acc
+        acc_ci_hi = acc
+        logger.info(f'GSM8K accuracy: {acc * 100:.2f}% ({correct}/{total})')
+
+    results = {
+        'accuracy': acc,
+        'accuracy_se': acc_se,
+        'accuracy_ci_lo': acc_ci_lo,
+        'accuracy_ci_hi': acc_ci_hi,
+        'num_correct': correct,
+        'num_total': total,
+        'checkpoint_path': config.eval.checkpoint_path,
+        'records': records,
+    }
+    results_path = os.path.join(output_dir, 'results.json')
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    logger.info(f'GSM8K eval results saved to {results_path}')
+
+    if wandb.run is not None:
+        wandb.log({
+            'gsm8k/accuracy': acc,
+            'gsm8k/num_correct': correct,
+            'gsm8k/num_total': total,
+        })
+    return results
+
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
 def main(config):
     '''
     Training
     '''
-    # TODO: FIX!! don't hardcode anymore. 
-    RANK = 0
-    WORLD_SIZE = 1
+    RANK = int(os.environ.get("RANK", 0))
+    WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
 
     L.seed_everything(config.seed)
     _print_config(config, resolve=True, save_cfg=True)
@@ -534,6 +658,8 @@ def main(config):
         _sudoku_eval(**kwargs)
     elif config.mode == "nqueens_eval":
         _nqueens_eval(**kwargs)
+    elif config.mode == "gsm8k_eval":
+        _gsm8k_eval(**kwargs)
     else:
         _train(**kwargs, rank=RANK, world_size=WORLD_SIZE)
 

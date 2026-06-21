@@ -213,7 +213,7 @@ def _sample_batch(rng: np.random.Generator, group_order: np.ndarray, puzzle_indi
 
         # Put into batch
         batch_puzzle_indices.append(np.full(append_size, puzzle_id, dtype=np.int32))
-        batch.append(puzzle_start + np.random.choice(puzzle_size, append_size, replace=False))
+        batch.append(puzzle_start + rng.choice(puzzle_size, append_size, replace=False))
 
         current_size += append_size
 
@@ -800,6 +800,11 @@ def get_nqueens_dataset(config, mode, rank=0, world_size=1):
 _TINYGSM_SPLIT_CACHE: Dict[tuple, dict] = {}
 _TINYGSM_SPLITS = ("train", "validation")
 _TINYGSM_FIELDS = ("input_ids", "valid_tokens", "conditioning_mask")
+_TINYGSM_FIELD_DTYPES = {
+    "input_ids": np.int32,
+    "valid_tokens": np.uint8,
+    "conditioning_mask": np.uint8,
+}
 
 
 def _tiny_gsm_pad_and_mask(ids, prompt_len, block_size, train_on_prompt,
@@ -905,21 +910,45 @@ def _load_tiny_gsm_from_disk(cache_dir):
         }
     return splits
 
+def _save_tiny_gsm_to_disk(cache_dir, arrow_splits, block_size,
+                           batch_rows=100_000):
+    """Stream Arrow splits to .npy on disk without materializing whole columns.
 
-def _save_tiny_gsm_to_disk(cache_dir, splits):
+    Indexing an Arrow ``Dataset`` by column name (``ds[field]``) returns the
+    entire column as a Python list-of-lists. For TinyGSM (millions of rows x
+    ``block_size`` ints, each a boxed Python int) that needs hundreds of GB and
+    OOMs before we ever reach ``np.asarray``. Instead we slice each split in row
+    batches with numpy formatting and write straight into memmapped ``.npy``
+    files at the final dtype, so peak memory is just one batch.
+
+    Args:
+        arrow_splits: mapping ``{disk_split_name: arrow_dataset}`` (e.g.
+            ``{"train": ..., "validation": ...}``).
+        block_size: padded sequence length (every row has exactly this many).
+    """
     parent = os.path.dirname(cache_dir) or "."
     os.makedirs(parent, exist_ok=True)
     tmp_dir = f"{cache_dir}.tmp.{os.getpid()}"
     os.makedirs(tmp_dir, exist_ok=True)
     try:
-        for split in _TINYGSM_SPLITS:
-            # Token ids fit in int32; masks are 0/1.
-            np.save(os.path.join(tmp_dir, f"{split}__input_ids.npy"),
-                    np.asarray(splits[split]["input_ids"], dtype=np.int32))
-            np.save(os.path.join(tmp_dir, f"{split}__valid_tokens.npy"),
-                    np.asarray(splits[split]["valid_tokens"], dtype=np.uint8))
-            np.save(os.path.join(tmp_dir, f"{split}__conditioning_mask.npy"),
-                    np.asarray(splits[split]["conditioning_mask"], dtype=np.uint8))
+        for split, ds_split in arrow_splits.items():
+            n = len(ds_split)
+            ds_np = ds_split.with_format("numpy", columns=list(_TINYGSM_FIELDS))
+            writers = {
+                field: np.lib.format.open_memmap(
+                    os.path.join(tmp_dir, f"{split}__{field}.npy"),
+                    mode="w+", dtype=dtype, shape=(n, block_size))
+                for field, dtype in _TINYGSM_FIELD_DTYPES.items()
+            }
+            for start in range(0, n, batch_rows):
+                stop = min(start + batch_rows, n)
+                batch = ds_np[start:stop]
+                for field, dtype in _TINYGSM_FIELD_DTYPES.items():
+                    writers[field][start:stop] = batch[field].astype(
+                        dtype, copy=False)
+            for writer in writers.values():
+                writer.flush()
+            writers.clear()
         os.replace(tmp_dir, cache_dir)
     finally:
         if os.path.isdir(tmp_dir):
@@ -1000,11 +1029,13 @@ def _build_tiny_gsm_splits(config, tokenizer):
 
     tmp = tokenized.train_test_split(
         test_size=float(data_cfg.val_ratio), seed=int(data_cfg.val_seed))
-    splits = {
-        "train": {f: np.asarray(tmp["train"][f]) for f in _TINYGSM_FIELDS},
-        "validation": {f: np.asarray(tmp["test"][f]) for f in _TINYGSM_FIELDS},
-    }
-    _save_tiny_gsm_to_disk(cache_dir, splits)
+    _save_tiny_gsm_to_disk(
+        cache_dir,
+        {"train": tmp["train"], "validation": tmp["test"]},
+        block_size)
+    # Re-open as memmaps, matching the disk-cache load path so RAM stays low.
+    splits = _load_tiny_gsm_from_disk(cache_dir)
+    
     _TINYGSM_SPLIT_CACHE[key] = splits
     return splits
 
@@ -1036,6 +1067,129 @@ def get_tiny_gsm_dataset(config, tokenizer, mode, rank=0, world_size=1):
             dataset, list(range(rank, len(dataset), world_size)))
     return dataset
 
+# ---------------------------------------------------------------------------
+# GSM8K *test* set -- the actual grade-school-math benchmark used to score a
+# model trained on TinyGSM. Mirrors s-flm's ``get_gsm8k_test_dataset``: each
+# example becomes the prompt ``[BOS] question <sep>`` and the model generates
+# the continuation (Python code defining ``simple_math_problem``), which
+# ``sandbox_gsm8k.evaluate_samples`` executes and compares to the gold answer.
+#
+# Unlike s-flm -- which feeds a variable-length prefix to a left-to-right
+# ``generate_samples(prefix_tokens, prefix_lengths)`` -- our FLM consumes a
+# *full-length* sequence plus a ``conditioning_mask`` (the same infill contract
+# as sudoku / N-Queens). So each item is padded to ``model.length`` with the
+# prompt held clean (conditioning_mask=1) and the answer region to be filled.
+#
+# Source: a local JSON (``data.data_path``; records carry ``prompt`` and
+# ``response_ground_truth``) if given, else the HF ``openai/gsm8k`` test split
+# (``question`` -> prompt, ``answer`` -> response_ground_truth).
+# ---------------------------------------------------------------------------
+class GSM8KTestDataset(torch.utils.data.Dataset):
+    """Map-style GSM8K test set for conditional (infill) generation.
+
+    Each item is ``{input_ids, conditioning_mask, prompt_len, prompt,
+    response_ground_truth}``. ``input_ids``/``conditioning_mask`` are padded to
+    ``block_size``; the prompt occupies ``[0:prompt_len]`` and is the clean
+    conditioning region, the rest is generated and decoded as the response.
+    """
+
+    def __init__(self, records):
+        self.records = records
+
+    def __len__(self):
+        return len(self.records)
+
+    def __getitem__(self, idx):
+        rec = self.records[idx]
+        return {
+            "input_ids": torch.tensor(rec["input_ids"], dtype=torch.long),
+            "conditioning_mask": torch.tensor(
+                rec["conditioning_mask"], dtype=torch.long),
+            "prompt_len": int(rec["prompt_len"]),
+            "prompt": rec["prompt"],
+            "response_ground_truth": rec["response_ground_truth"],
+        }
+
+
+def _load_gsm8k_test_records(config):
+    """Return a list of ``{prompt, response_ground_truth}`` dicts.
+
+    Prefers a local JSON file (``data.data_path``) to match s-flm exactly;
+    otherwise pulls the HF GSM8K test split.
+    """
+    data_path = getattr(config.data, "data_path", None)
+    if data_path:
+        path = data_path if os.path.isabs(data_path) else os.path.join(
+            original_cwd(), data_path)
+        LOGGER.info("Loading GSM8K test from %s", path)
+        with open(path) as f:
+            loaded = json.load(f)
+        records = loaded["records"] if isinstance(loaded, dict) and \
+            "records" in loaded else loaded
+        return [
+            {"prompt": r["prompt"],
+             "response_ground_truth": r["response_ground_truth"]}
+            for r in records
+        ]
+
+    hf_name = getattr(config.data, "hf_test_name", "openai/gsm8k")
+    hf_config = getattr(config.data, "hf_test_config", "main")
+    hf_split = getattr(config.data, "hf_test_split", "test")
+    LOGGER.info("Loading GSM8K test from HF %s/%s split=%s",
+                hf_name, hf_config, hf_split)
+    ds = datasets.load_dataset(
+        hf_name, hf_config, split=hf_split,
+        cache_dir=getattr(config.data, "cache_dir", None))
+    return [
+        {"prompt": ex["question"], "response_ground_truth": ex["answer"]}
+        for ex in ds
+    ]
+
+
+def get_gsm8k_test_dataset(config, tokenizer):
+    """Build the GSM8K test set as full-length infill prompts.
+
+    Layout per example mirrors training: ``[BOS] question <sep>`` then the
+    answer region (filled by generation). The prompt is the conditioning
+    (clean) region; nothing here is in any loss -- this split is eval-only.
+    """
+    assert tokenizer is not None, "GSM8K test requires a HuggingFace tokenizer"
+    block_size = int(config.model.length)
+    bos_id = tokenizer.bos_token_id
+    pad_id = tokenizer.pad_token_id
+    assert bos_id is not None and pad_id is not None
+    sep_ids = tokenizer(config.data.separator,
+                        add_special_tokens=False).input_ids
+
+    raw = _load_gsm8k_test_records(config)
+    records = []
+    n_truncated = 0
+    for r in raw:
+        q_ids = tokenizer(r["prompt"].strip(),
+                          add_special_tokens=False).input_ids
+        ids = [bos_id] + q_ids + sep_ids
+        # Leave at least one position for generation; truncate over-long prompts.
+        if len(ids) >= block_size:
+            ids = ids[:block_size - 1]
+            n_truncated += 1
+        prompt_len = len(ids)
+        input_ids = ids + [pad_id] * (block_size - prompt_len)
+        conditioning_mask = [1] * prompt_len + [0] * (block_size - prompt_len)
+        records.append({
+            "input_ids": input_ids,
+            "conditioning_mask": conditioning_mask,
+            "prompt_len": prompt_len,
+            "prompt": r["prompt"],
+            "response_ground_truth": r["response_ground_truth"],
+        })
+    if n_truncated:
+        LOGGER.warning(
+            "GSM8K test: truncated %d/%d prompts that met or exceeded "
+            "block_size=%d", n_truncated, len(records), block_size)
+    LOGGER.info("Prepared %d GSM8K test prompts (block_size=%d)",
+                len(records), block_size)
+    return GSM8KTestDataset(records)
+
 def get_dataset(dataset_name,
                 mode,
                 rank,
@@ -1054,6 +1208,8 @@ def get_dataset(dataset_name,
         return get_nqueens_dataset(config, mode, rank, world_size)
     elif dataset_name == "tinygsm":
         return get_tiny_gsm_dataset(config, tokenizer, mode, rank, world_size)
+    elif dataset_name in ("gsm8k_test", "gsm8k-test"):
+        return get_gsm8k_test_dataset(config, tokenizer)
     else:
         raise ValueError(f"Only valid dataset name is sudoku-extreme and mnist. Received {dataset_name}")
 
