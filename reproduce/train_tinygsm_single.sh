@@ -23,7 +23,7 @@ cd "${REPO_ROOT}"
 
 TOKENIZER="${TOKENIZER:-HuggingFaceTB/SmolLM-135M}"
 MODEL_LENGTH="${MODEL_LENGTH:-512}"
-GLOBAL_BATCH="${GLOBAL_BATCH:-512}"
+GLOBAL_BATCH="${GLOBAL_BATCH:-64}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 MAX_STEPS="${MAX_STEPS:-250000}"
 VAL_CHECK_INTERVAL="${VAL_CHECK_INTERVAL:-10000}"
@@ -41,7 +41,7 @@ for cprob in "${conditioning_prob_clean_values[@]}"; do
   echo ""
   echo "=== ${run_name} ==="
 
-  torchrun --standalone --nproc_per_node=8 main.py \
+  python main.py \
     data=tinygsm \
     data.tokenizer_name_or_path="${TOKENIZER}" \
     data.wrap=False \
