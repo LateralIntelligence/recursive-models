@@ -18,7 +18,7 @@ streaming: False
 insert_train_eos: True
 insert_valid_eos: True
 
-separator: '\n'   # literal backslash-n, must match tinygsm training
+separator: "\n":   # slightly different than tinyGSM training
 
 # Source: local JSON (records with `prompt` + `response_ground_truth`) if set,
 # else the HuggingFace GSM8K test split below.

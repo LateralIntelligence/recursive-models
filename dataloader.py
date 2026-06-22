@@ -726,10 +726,10 @@ def get_sudoku_dataset(config, mode, rank=0, world_size=1):
             )
             dataset = torch.utils.data.Subset(dataset, indices)
     
-    if world_size > 1:
+    #if world_size > 1:
         # Shard across ranks (no DistributedSampler is configured upstream).
-        dataset = torch.utils.data.Subset(
-            dataset, list(range(rank, len(dataset), world_size)))
+        #dataset = torch.utils.data.Subset(
+            #dataset, list(range(rank, len(dataset), world_size)))
     return dataset
 
 # Cache generated N-Queens splits (keyed by the params that affect generation)
@@ -773,9 +773,9 @@ def get_nqueens_dataset(config, mode, rank=0, world_size=1):
                 infill_loss_region=infill_loss_region)
     
     # TODO: optionally add subsetting to the train dataset
-    if world_size > 1:
-        dataset = torch.utils.data.Subset(
-            dataset, list(range(rank, len(dataset), world_size)))
+    #if world_size > 1:
+    #    dataset = torch.utils.data.Subset(
+    #        dataset, list(range(rank, len(dataset), world_size)))
     return dataset
 
 
@@ -1062,9 +1062,9 @@ def get_tiny_gsm_dataset(config, tokenizer, mode, rank=0, world_size=1):
                 subset_n, len(dataset))
             dataset = torch.utils.data.Subset(dataset, indices)
 
-    if world_size > 1:
-        dataset = torch.utils.data.Subset(
-            dataset, list(range(rank, len(dataset), world_size)))
+    #if world_size > 1:
+    #    dataset = torch.utils.data.Subset(
+    #        dataset, list(range(rank, len(dataset), world_size)))
     return dataset
 
 # ---------------------------------------------------------------------------
