@@ -1,0 +1,48 @@
+\begin{thebibliography}{8}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[{TODO}(2025{\natexlab{a}})]{TODO-CFG}
+{TODO}.
+\newblock [todo] classifier-free diffusion guidance, 2025{\natexlab{a}}.
+\newblock Placeholder; supply arXiv link.
+
+\bibitem[{TODO}(2025{\natexlab{b}})]{TODO-FLM}
+{TODO}.
+\newblock [todo] flow language model, 2025{\natexlab{b}}.
+\newblock Placeholder; supply arXiv link.
+
+\bibitem[{TODO}(2025{\natexlab{c}})]{TODO-blockwise-sft}
+{TODO}.
+\newblock [todo] blockwise sft for diffusion language models, 2025{\natexlab{c}}.
+\newblock Placeholder; supply arXiv link.
+
+\bibitem[{TODO}(2025{\natexlab{d}})]{TODO-cascaded}
+{TODO}.
+\newblock [todo] cascaded diffusion models for high fidelity image generation, 2025{\natexlab{d}}.
+\newblock Placeholder; supply arXiv link.
+
+\bibitem[{TODO}(2025{\natexlab{e}})]{TODO-diffusion-forcing}
+{TODO}.
+\newblock [todo] diffusion forcing, 2025{\natexlab{e}}.
+\newblock Placeholder; supply arXiv link.
+
+\bibitem[{TODO}(2025{\natexlab{f}})]{TODO-gram}
+{TODO}.
+\newblock [todo] gram / n-queens coverage source, 2025{\natexlab{f}}.
+\newblock Placeholder; supply arXiv link.
+
+\bibitem[{TODO}(2025{\natexlab{g}})]{TODO-prompt-infill}
+{TODO}.
+\newblock [todo] unlocking prompt infilling capability for diffusion language models, 2025{\natexlab{g}}.
+\newblock Placeholder; supply arXiv link.
+
+\bibitem[{TODO}(2025{\natexlab{h}})]{TODO-trm}
+{TODO}.
+\newblock [todo] sudoku-extreme / trm benchmark source, 2025{\natexlab{h}}.
+\newblock Placeholder; supply arXiv link.
+
+\end{thebibliography}

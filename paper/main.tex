@@ -1,0 +1,517 @@
+\documentclass{article}
+\usepackage[submission]{colm2026_conference}
+
+\usepackage{microtype}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{lineno}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc}
+
+\input{math_commands.tex}
+
+\definecolor{boxblue}{RGB}{0,114,178}
+\definecolor{pastein}{RGB}{213,94,0}
+\definecolor{timegray}{RGB}{80,80,80}
+\definecolor{darkblue}{rgb}{0, 0, 0.5}
+\hypersetup{colorlinks=true, citecolor=darkblue, linkcolor=darkblue, urlcolor=darkblue}
+
+\title{Don't Paste In Conditioning Tokens: Noising Conditioning Tokens \\
+for Conditional Generation in Continuous Diffusion Language Models}
+
+% Authors must not appear in the submitted version (handled by the "submission" option).
+\author{Anonymous}
+
+\begin{document}
+
+\ifcolmsubmission
+\linenumbers
+\fi
+
+\maketitle
+
+\begin{abstract}
+Fundamentally, diffusion and flow models learn a score or velocity which can be integrated
+via an ODE solver to map from a base distribution to data distribution. One way to
+parameterize their learning objective is via the $x_1$ prediction; i.e, predict the target
+data given the current noised input $x_t$. In practical setting for language, generation is
+conditional: given a prompt, generate a response. Motivated by the downstream application of
+conditional generation, we view the $x_1$ denoising objective of continuous diffusion language
+models as conditional prediction: given an input $x_t$ (and optionally conditioning info $c$),
+predict the target output data $x_1$. Under this view, we see the various noising levels of
+the training objective as curriculum learning; predict the data $x_1$ varying degrees of
+signal of the input $x_t$. From this perspective, we introduce a simple modification to
+continuous diffusion language model training objective: noise the conditioning tokens as well.
+We demonstrate that with this simple modification, we get better generalization and generation
+quality, as measured by various datasets such as Sudoku, NQueens, and moreover (TODO ADD)
+language reasoning with GSM8k. Our method can be seen as a generalization of the classifier
+free guidance training set up.
+
+
+% TODO: ~150 words. Core claim: standard conditional continuous-diffusion LMs hold
+% conditioning (clue) tokens clean throughout corruption ("paste-in"). We instead noise
+% the conditioning tokens during training, controlled by p_condclean (prob a conditioning
+% token is kept clean). Lower p_condclean (more noising) consistently improves infill
+% accuracy and, especially, solution COVERAGE on Sudoku (easy) and N-Queens (8x8, 10x10).
+% Headline numbers: Sudoku-easy N=10k acc 86.6% (p=0.2) vs 56.05% (p=1.0);
+% N-Queens coverage monotonic across all settings. Position as generalization of CFG.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+% TODO: Motivate conditional generation in continuous diffusion LMs (infilling puzzles:
+%   observe clue cells, generate the rest). Standard practice: clamp conditioning tokens
+%   clean at every denoising step ("paste-in" / always-clean clues, our p_condclean=1.0).
+% TODO: State the surprising finding: NOISING conditioning tokens during training improves
+%   conditional generation; clean-clue training collapses toward fewer modes.
+% TODO: Frame as a generalization of classifier-free guidance (p=1 conditional-only,
+%   p=0 unconditional-only). See notes June 11-12.
+% TODO: Contributions bullet list (the noised-conditioning training scheme; cross-task
+%   evidence on Sudoku + N-Queens; coverage as the discriminating metric).
+% Citation needs: \cite{TODO-CFG}, \cite{TODO-FLM}, \cite{TODO-diffusion-forcing}.
+
+
+Fundamentally, diffusion and flow models learn a score or velocity corresponding to an ODE
+which can be integrated to map from a base distribution to the target data distribution.
+(we need to make this more precise) Their objective can be parameterized in different ways,
+including the denoising parametrization $\hat{x}_1(x_t)$, where the goal is to predict a
+clean target data $x_1$ given a current noisy input $x_t$.
+
+Our framework is to view this learning objective from the lens of conditional prediction:
+given an noisy input, predict a clean target. We then see the varying levels of noise
+corruption of the input as a form of curriculum learning, where the model is trained on
+harder (more noisier) inputs and easier (less noiser) inputs.
+
+In practice for language modelling, conditional generation is the main paradigm: given a
+conditioning prompt, generate a response. Currently, conditional generation in continuous
+diffusion language models / flow language models utilize following learning objective: given
+conditioning tokens $x^c$ and a noised response $y_t$, predict the target response $y_1$.
+Likewise in sampling, the conditioning tokens are fixed and non-noised. (Double check: but
+this is what sFLM does. Check FLM. Check ELF.) We improve this conditional learning objective
+by allowing conditional tokens to also be noised: given noised conditional input $x_t^c$,
+noised response $y_t$, predict the target response $y_1$. We believe this objective induces
+curriculum learning, where the prediction problem $x \to y$ is made more difficult by
+increasing the amount of noise in the conditioning input. Moreover, (TODO:  we can delete
+this) by noising the conditioning input, our model has a wider target that it can learn from
+(also needs to match the denoised conditioning input), making learning more compute
+efficient. Finally, by varying the amount of conditioning signal, we believe that the
+learning objective is more robust and conducive to generalization. Varying the level of noise
+on the conditioning input can be seen as a generalization of classifier free guidance.
+(TODO: verify CFG).
+Empirically, we verify on various reasoning tasks, such as Sudoku and NQueens. We find that
+by additionally noising the conditioning inputs, we get better conditional generation
+performance on these reasoning benchmarks and we get higher levels of generation diversity.
+
+
+\section{Background and Related Work}
+\label{sec:background}
+\paragraph{Continuous diffusion and flow language models.}
+Continuous diffusion and flow models for text learn a velocity or score that an ODE/SDE solver
+integrates from a base distribution to data; the denoising ($x_1$-prediction) parameterization
+predicts the clean target from a noised input~\citep{TODO-FLM}. Conditional generation is typically
+implemented by holding the conditioning tokens clean throughout corruption and re-pasting them at
+every sampling step. Diffusion forcing~\citep{TODO-diffusion-forcing} assigns each token its own
+noise level, which is what lets us noise clue tokens independently of the cells we generate.
+
+\paragraph{Classifier-free guidance.}
+Classifier-free guidance~\citep{TODO-CFG} jointly trains a conditional and an unconditional model by
+randomly dropping the conditioning signal. Our scheme generalizes this: rather than a binary
+present/absent conditioning signal, the per-token noise level continuously interpolates the strength
+of the conditioning, with $p=1$ (always clean) and $p=0$ (always noised) as the conditional-only and
+unconditional-only endpoints.
+
+\paragraph{Corrupting conditioning / prefix tokens.}
+Corrupting conditioning information has appeared in other settings but with different aims. Cascaded
+diffusion models~\citep{TODO-cascaded} corrupt the low-resolution conditioning image for robustness
+to upstream artifacts. In diffusion language models, Blockwise SFT~\citep{TODO-blockwise-sft} reports
+that corrupting the prefix \emph{hurts} autoregressive-style decoding---a contrast with our finding
+that noising clue tokens helps conditional infilling---and prompt-infilling work~\citep{TODO-prompt-infill}
+fine-tunes masked diffusion models for infilling without noising the conditioning. Unlike the image
+cascade setting, our inference-time conditioning input is always clean; the noising acts purely as a
+training-time regularizer/curriculum.
+
+\paragraph{Combinatorial reasoning benchmarks.}
+We evaluate on Sudoku~\citep{TODO-trm} and N-Queens~\citep{TODO-gram}, constraint-satisfaction tasks
+where solving unseen instances requires learning the rules rather than memorizing input/output pairs;
+N-Queens additionally admits many solutions per board, enabling a coverage (diversity) metric.
+
+\section{Method}
+\label{sec:method}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  >={Stealth[length=2.4mm]},
+  font=\small,
+]
+\def\S{6}
+% ---- our training region: the full box ----
+\fill[boxblue!10] (0,0) rectangle (\S,\S);
+\draw[boxblue!55,line width=0.8pt] (0,0) rectangle (\S,\S);
+% ---- axes ----
+\draw[->,thick] (-0.2,0) -- (\S+1.1,0) node[right]{$t$ \,(response)};
+\draw[->,thick] (0,-0.2) -- (0,\S+0.7) node[above]{$t'$ \,(conditioning prompt)};
+% conditioning-axis endpoints (noise/clean)
+\node[left] at (-0.1,0) {\scriptsize noise};
+\node[left] at (-0.1,\S) {\scriptsize clean};
+% response-axis endpoints (t=0 / t=1 ticks)
+\node[below] at (0,-0.18) {\scriptsize $t{=}0$};
+\node[below] at (\S,-0.18) {\scriptsize $t{=}1$};
+% ---- paste-in: the top edge t'=1 ----
+\draw[pastein,line width=2.2pt] (0,\S) -- (\S,\S);
+\node[pastein,above=2pt,align=center] at (\S/2,\S)
+  {\textbf{paste-in (default):} conditioning fixed clean, $t'{=}1$};
+\node[pastein,below=2pt,align=center] at (\S*0.30,\S)
+  {\scriptsize limited training coverage};
+% ---- ours label inside the box ----
+\node[boxblue!85!black,align=center] at (\S*0.40,\S*0.46)
+  {\textbf{ours:} train with various levels\\[1pt]
+  of conditioning information};
+% ---- expansive vertical double-arrow ----
+\draw[boxblue!80!black,line width=1.3pt,<->] (\S*0.88,0.5) -- (\S*0.88,\S-0.7);
+\node[boxblue!80!black,rotate=90,anchor=south] at (\S*0.88-0.18,\S*0.42)
+  {\scriptsize range of conditioning noise levels};
+% ---- bottom time arrow ----
+\draw[timegray,line width=1.2pt,->] (0.15,-1.0) -- (\S-0.05,-1.0);
+\node[timegray,below=1pt] at (\S/2,-1.0)
+  {\scriptsize generation: \ noise $(t{=}0)\ \to\ $clean $(t{=}1)$};
+\end{tikzpicture}
+\caption{Our method. Standard conditional training pastes in clean conditioning tokens, covering
+only the top edge ($t'{=}1$) of the training space (orange). Instead, we train over a range of
+conditioning noise levels (blue region), exposing the model to a curriculum of conditioning
+strengths. At generation time we still integrate the response from noise ($t{=}0$) to clean
+($t{=}1$) with the conditioning held clean.}
+\label{fig:method}
+\end{figure}
+
+% TODO: Setup. Sequence layout: in-place infill, board of length L (Sudoku 81; N-Queens n*n).
+%   conditioning_mask marks clue cells; valid_tokens marks loss region (infill_loss_region=board).
+% TODO: Flow / corruption process; per-token noise time tau_t under diffusion forcing.
+% TODO: The knob. conditioning_time_random=true: conditioning tokens' noise time is sampled;
+%   with prob p_condclean they are held clean (tau=0), else noised to the board tokens' level.
+%   p=1.0 recovers standard paste-in conditional training; p=0 = fully unconditional.
+% TODO: Equation for the training loss / objective.
+% TODO: Sampling: Euler ODE / ancestral; conditioning positions clamped to clean one-hot at
+%   inference regardless of training p (note: at inference conditioning input is always clean).
+% TODO: Define metrics -- accuracy (valid-solution rate) and coverage (distinct valid
+%   solutions recovered per puzzle over k samples).
+
+[Take 1]
+Our method is simple and requires minimal modification from the default
+training objective of flow language models. It can also be seen as a generalization of classifier
+free guidance.
+Simply put, with some probability $p_{clean}$ , we keep the conditioning tokens clean; else,
+we noise the conditioning tokens as well.
+
+During sampling, following the diffusion/flow language model literature, we keep the
+conditioning tokens clean and paste clean tokens at each sampling step. To prevent a large
+training and sampling mismatch, with some probability $p_{clean}$ we choose to keep the
+conditioning tokens clean to supply as input. The model then predicts using inputs
+$(x_{t=1},y_t)$, where $x_{t=1}$ is the clean conditioning tokens and $y_t$ is the noised
+response tokens.
+
+At the same time, we do not want the model to become too reliant on the conditioning tokens and learn 
+a brittle mapping $x \to y$. Thus, with the remaining
+probability $1- p_{clean}$, we noise our conditioning tokens, reducing the amount of conditioning signal 
+the model has access to. It receives as input
+both noised conditioning tokens and noised response tokens $(x_t, y_t)$. As visualized in Figure 1, 
+(TODO: add Fig link) by additionally noising our conditioning tokens, our model is trained under a
+broader curriculum of conditional prediction tasks, where the model receives both a lot of 
+conditioning signal (making prediction task easier) and little conditioning signal
+(making prediction task harder).  
+
+By default we also make use of the conditional tokens in the loss and have the model 
+predict denoised versions of the conditioning tokens $x_t$. This utilizes all the tokens in the denoising
+objective, making the training objective more compute efficient. We discuss the effect of
+this in (TODO: add ablation section)
+
+We can see our method as a generalization of CFG: we see full noise $t=0$ as analogous to
+dropping the conditioning information $x_t = \varnothing$, and we see no noise $t=1$ as
+preserving the conditioning tokens.
+
+[Take 2]
+TODO: Can add if it's better.
+
+\subsection{Setup}
+\label{sec:method-setup}
+We work in an \emph{in-place infill} layout. Each example is a single board of length $L$
+(Sudoku: $L=81$; N-Queens: $L=n^2$) over a small vocabulary. A binary
+\emph{conditioning mask} marks the clue cells $\mathcal{C}$ that are revealed to the model;
+the complementary generation cells $\mathcal{G}$ are to be predicted. We compute the loss over
+the full board (clue and generation cells alike); only the clue cells are eligible to be held
+clean (Section~\ref{sec:method-objective}).
+
+\subsection{Corruption process and the conditioning knob}
+\label{sec:method-objective}
+We adopt a continuous-time flow / $x_1$-prediction model with per-token noise levels
+(\emph{diffusion forcing}~\citep{TODO-diffusion-forcing}): each position $i$ carries its own time
+$\tau_i \in [0,1]$, where $\tau_i = 1$ denotes the clean token and $\tau_i = 0$ full noise, and
+$x_i(\tau_i)$ is the corresponding corrupted input. The denoiser $f_\theta$ receives the noised
+board together with the per-token times and predicts the clean target $\hat{x}_1$.
+
+A single scalar $p \equiv p_\text{condclean}$ controls how the clue tokens are corrupted. For each
+example we draw a shared time $t \sim \mathcal{U}(0,1)$ and set
+\[
+\tau_i \;=\; t \quad (i \in \mathcal{G}), \qquad
+\tau_i \;=\;
+\begin{cases}
+1 & \text{w.p. } p \quad(\text{clue held clean}),\\
+t & \text{w.p. } 1-p \quad(\text{clue noised to the board level}),
+\end{cases}
+\quad (i \in \mathcal{C}).
+\]
+The training objective is the cross-entropy between the prediction and the clean board over the
+loss region $\mathcal{L}$ (the full board by default):
+\[
+\mathcal{L}(\theta) \;=\; \mathbb{E}_{x_1,\, t,\, \{\tau_i\}}
+\Big[\, \textstyle\sum_{i \in \mathcal{L}} \mathrm{CE}\big(f_\theta(x(\tau))_i,\; (x_1)_i\big) \Big].
+\]
+Setting $p=1$ recovers the standard ``paste-in'' conditional objective (clues always clean);
+$p=0$ recovers a fully unconditional objective (clues noised exactly like the rest of the board).
+Intermediate $p$ interpolates between the two, exposing the model to a curriculum of conditioning
+strengths within a single training run.
+
+\subsection{Sampling}
+\label{sec:method-sampling}
+At inference we follow standard practice for conditional flow language models: the conditioning
+input is always clean, so clue positions are clamped to their clean one-hot values and re-pasted
+after every solver step, \emph{independent of the training $p$}. We integrate the generation cells
+with a first-order Euler ancestral sampler. Because training with $p<1$ exposes the model to clean
+clues only a $p$ fraction of the time, a small amount of clean exposure is still required to avoid
+a train/inference mismatch at the always-clean test condition; we return to this in
+Section~\ref{sec:analysis}.
+
+\subsection{Metrics}
+\label{sec:method-metrics}
+We report two metrics. \textbf{Accuracy} is the fraction of generated boards that are valid
+solutions to the puzzle (pooled over all puzzles and samples). \textbf{Coverage} (N-Queens) is, per
+puzzle, the fraction of \emph{distinct} valid solutions recovered across the $k$ samples, averaged
+over puzzles; it measures the diversity of the generative distribution rather than single-shot
+correctness. We report $95\%$ confidence intervals obtained by bootstrap resampling over the
+evaluation puzzles ($10{,}000$ resamples; for N-Queens the resampling is over the $750$ input
+boards, with per-board accuracy and coverage computed from that board's $20$ generations).
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Setup}
+\label{sec:setup}
+Across all experiments the backbone is a DiT-style transformer (DDiT) with hidden size $512$,
+$8$ blocks, $8$ attention heads, conditioning dimension $128$, and dropout $0.1$, trained with a
+flow objective and $x_1$-prediction under a log-linear noise schedule. We optimize with
+Adam\footnote{The optimizer class (Adam vs.\ AdamW) is \textbf{[TODO]} to confirm against the
+original configuration.} (learning rate $3\times10^{-4}$, $(\beta_1,\beta_2)=(0.9,0.999)$, no weight
+decay), a constant schedule with $2{,}500$ warmup steps, gradient clipping at $1.0$,
+bf16-mixed precision, and an EMA of $0.9999$. We use antithetic time sampling and a $t$-curriculum
+that anneals the sampled time range from $[0,0]$ to $[0,1]$ over $100$k steps. Unless noted, we
+sample with a $128$-step Euler ancestral solver at temperature $1.0$. The single swept variable is
+$p_\text{condclean} \in \{0.2, 0.5, 1.0\}$ (and $0.0$ where noted); all other settings are held
+fixed. Full hyperparameters are in Appendix~\ref{app:hyperparams}.
+The training GPU model is \textbf{[TODO]}, and whether the vocabulary includes additional special
+tokens is \textbf{[TODO]}.
+
+\subsection{Sudoku (Easy)}
+\label{sec:sudoku}
+% TODO: Infill, full 9x9 board (length 81), difficulty easy, loss over board tokens.
+%   Sweep p_condclean in {0.2, 0.5, 1.0}; data scales N=10,000 and N=1,000. 160k steps.
+%   Eval on 2,000 puzzles. (experiment_log.md Runs 1-2; June 16 entry.)
+% TODO: Table -- Sudoku-easy accuracy vs p_condclean:
+%   N=10k: 0.2 -> 86.6%, 0.5 -> 74.75%, 1.0 -> 56.05%  (0.0 -> 2.85%, optional)
+%   N=1k : 0.2 -> 11.0%, 0.5 -> 9.9%, 1.0 -> 2.3%       (0.0 -> 0.5%, optional)
+% TODO: Observation -- monotonic: more noising (lower p) -> higher accuracy; ordering
+%   preserved across data scale despite large absolute drop at N=1k.
+
+Sudoku is a (add short introduction, can borrow from SFLM or other papers).
+We believe that Sudoku is a good reasoning benchmark because of its combinatorial nature: in
+order to solve unseen puzzles, the model simply learn a mapping from $x \to y$, it must
+implicitly learn the constraints of the game.
+
+We train on the \emph{easy} split in the in-place infill layout: a full $9\times9$ board
+(length $81$), with the loss taken over all board tokens. We sweep $p_\text{condclean}$ at two
+training-set sizes, $N=10{,}000$ and $N=1{,}000$ puzzles, training for $160$k steps at batch size
+$32$ and evaluating accuracy on $2{,}000$ held-out puzzles (Table~\ref{tab:sudoku}).
+
+\begin{table}[t]
+\centering
+\caption{Sudoku (easy) infill accuracy (\%) on $2{,}000$ held-out puzzles vs.\ the conditioning
+clean probability $p_\text{condclean}$, with $95\%$ bootstrap CIs ($10{,}000$ resamples) in
+brackets. Lower $p$ (more heavily noised clues) yields higher accuracy; the ordering is preserved
+across data scale. $p{=}1.0$ is the standard ``paste-in'' setup; $p{=}0.0$ is fully unconditional.}
+\label{tab:sudoku}
+\begin{tabular}{lcc}
+\toprule
+$p_\text{condclean}$ & $N=10{,}000$ & $N=1{,}000$ \\
+\midrule
+$0.0$ (unconditional) & $2.85$ & $0.50$ \\
+ & {\scriptsize $[2.15,\,3.60]$} & {\scriptsize $[0.20,\,0.85]$} \\
+$0.2$ & $\mathbf{86.60}$ & $\mathbf{11.00}$ \\
+ & {\scriptsize $[85.10,\,88.10]$} & {\scriptsize $[9.65,\,12.45]$} \\
+$0.5$ & $74.75$ & $9.90$ \\
+ & {\scriptsize $[72.85,\,76.65]$} & {\scriptsize $[8.60,\,11.25]$} \\
+$1.0$ (paste-in) & $56.05$ & $2.30$ \\
+ & {\scriptsize $[53.90,\,58.20]$} & {\scriptsize $[1.65,\,2.95]$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Accuracy decreases monotonically as $p_\text{condclean}$ increases from $0.2$ to $1.0$: at
+$N=10{,}000$ the heavily-noised setting reaches $86.6\%$ versus $56.05\%$ for the standard always-clean
+clues, a $30.6$-point gap, and the same ordering holds at $N=1{,}000$ despite the much lower absolute
+accuracy. The fully-unconditional endpoint ($p=0.0$) collapses ($2.85\%$ / $0.5\%$): noising the
+clues helps, but the model still needs to see clean clues some of the time to match the always-clean
+inference condition. The best setting is thus an intermediate-but-low $p$, not the extreme. The
+$95\%$ bootstrap CIs are non-overlapping across $p$ at $N=10{,}000$, so those separations are
+significant; at $N=1{,}000$ the $p{=}0.2$ and $p{=}0.5$ intervals overlap (that gap is not
+significant), though both clearly exceed $p{=}1.0$.
+
+\subsection{N-Queens}
+\label{sec:nqueens}
+% TODO: Infill on n*n board, tokens {0=pad,1=empty,2=queen}; sweep p_condclean {0.2,0.5,1.0}.
+%   Last checkpoint, 750 puzzles x 20 samples. N=8 (length 64) and N=10 (length 100).
+%   (experiment_log.md Runs 3-4; June 18-19 entries.)
+% TODO: Table -- accuracy & coverage vs p_condclean:
+%   N=8  (750x20): 0.2 -> 99.24/97.31; 0.5 -> 98.75/91.41; 1.0 -> 97.67/88.07
+%   N=10 (750x20): 0.2 -> 94.66/80.01; 0.5 -> 57.42/71.05; 1.0 -> 64.56/64.03
+% TODO: Observation -- coverage monotonic across BOTH n; p=0.2 dominates. Flag the N=10
+%   ACCURACY non-monotonicity (p=0.5 below p=1.0): robust claim is coverage ordering +
+%   dominance of heavy noising, not strict accuracy monotonicity. Possibly single-seed noise
+%   -- note variance caveat (notes Run 4).
+
+NQueens is a (add short introduction, can borrow from GRAM.)
+In additional to being combinatorial in nature, in NQueens there can be multiple solutions
+for a given starting board. This allows us to measure the diversity of the generated
+solutions. Following GRAM, we track coverage of possible solutions and report the number of
+unique solutions generated out of the total number of possible solutions corresponding to
+that board. We evaluate on held out initial board states and generate 20 samples per board
+state.  (TODO: add more experimental details)
+
+We use the infill layout on an $n\times n$ board (length $n^2$) with token vocabulary
+$\{0\!=\!\text{pad},\,1\!=\!\text{empty},\,2\!=\!\text{queen}\}$, sweeping $p_\text{condclean}$ at
+two scales: $n=8$ (length $64$) and $n=10$ (length $100$). Training and evaluation splits are
+disjoint by clue board. For $n=8$ this yields $1{,}758$ training / $174$ validation puzzles; the
+$n=10$ train/validation counts are \textbf{[TODO]}. We train at global batch size $256$ and evaluate
+the \emph{last} checkpoint on $750$ held-out puzzles with $20$ generations each
+(Table~\ref{tab:nqueens}).
+
+\begin{table}[t]
+\centering
+\caption{N-Queens infill accuracy and coverage (\%), last checkpoint, $750$ puzzles
+$\times\,20$ samples, with $95\%$ bootstrap CIs ($10{,}000$ resamples over input boards) in
+brackets. Coverage is monotonic in $p_\text{condclean}$ at both scales and $p{=}0.2$
+dominates throughout. Note the accuracy non-monotonicity at $n=10$ ($p{=}0.5 < p{=}1.0$); see text.}
+\label{tab:nqueens}
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{$n=8$ (length 64)} & \multicolumn{2}{c}{$n=10$ (length 100)} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+$p_\text{condclean}$ & Accuracy & Coverage & Accuracy & Coverage \\
+\midrule
+$0.2$ & $\mathbf{99.24}$ & $\mathbf{97.31}$ & $\mathbf{94.66}$ & $\mathbf{80.01}$ \\
+ & {\scriptsize $[98.86,\,99.55]$} & {\scriptsize $[96.52,\,98.05]$} & {\scriptsize $[94.05,\,95.23]$} & {\scriptsize $[78.73,\,81.35]$} \\
+$0.5$ & $98.75$ & $91.41$ & $57.42$ & $71.05$ \\
+ & {\scriptsize $[98.20,\,99.23]$} & {\scriptsize $[90.02,\,92.74]$} & {\scriptsize $[55.88,\,58.95]$} & {\scriptsize $[69.31,\,72.77]$} \\
+$1.0$ (paste-in) & $97.67$ & $88.07$ & $64.56$ & $64.03$ \\
+ & {\scriptsize $[96.73,\,98.51]$} & {\scriptsize $[86.46,\,89.63]$} & {\scriptsize $[62.90,\,66.21]$} & {\scriptsize $[62.37,\,65.70]$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The discriminating effect is in coverage. At $n=8$ accuracy is high throughout ($97.7$--$99.2\%$,
+a $\sim1.6$-point spread) while coverage spans $\sim9$ points ($97.31 \to 88.07\%$) and is monotonic
+in $p$. At $n=10$, $p=0.2$ dominates decisively on both metrics (a $\sim30$-point accuracy lead and a
+$\sim9$-point coverage lead over the next best). Coverage remains monotonic
+($80.01 \to 71.05 \to 64.03\%$), but accuracy is \emph{not}: $p=0.5$ ($57.42\%$) falls below
+$p=1.0$ ($64.56\%$). The robust cross-task claim is therefore the coverage ordering and the
+dominance of heavily-noised conditioning ($p=0.2$), rather than strict accuracy monotonicity. The
+$95\%$ bootstrap CIs for the $p{=}0.5$ ($[55.88,58.95]$) and $p{=}1.0$ ($[62.90,66.21]$) accuracies
+at $n=10$ do not overlap, so the inversion is not an artifact of evaluation sampling; it is a single
+training run, however, so training-seed variance remains unchecked and a multi-seed confirmation is
+left to future work.
+
+\section{Analysis and Discussion}
+\label{sec:analysis}
+\paragraph{Why does noising the conditioning help?}
+We offer three (non-exclusive) readings, consistent with the evidence above. First, noising the
+clues acts as a \emph{regularizer} against a brittle copy-and-lookup solution: when clues are always
+clean, the model can rely on a shortcut $x\to y$ mapping, whereas forcing it to sometimes infer the
+answer from noised clues pushes it to internalize the task constraints. Second, this manifests as
+\emph{mode coverage}: always-clean training ($p=1$) collapses toward fewer solutions, which is
+exactly what the monotonic coverage drop on N-Queens shows (Table~\ref{tab:nqueens}). Third, the
+sweep can be read as a \emph{curriculum}: a single $p<1$ run mixes easy (clean-clue) and hard
+(noised-clue) conditional prediction problems within training.
+
+As a probe of the first reading, we masked all attention into the non-conditioning tokens at
+inference; a model that had merely learned to copy clue $\to$ solution would be largely unaffected,
+but solve rate dropped to $0\%$, indicating the model genuinely uses the generated cells rather than
+a lookup table.
+
+\paragraph{Relation to classifier-free guidance.}
+Because $p$ interpolates between a conditional-only ($p=1$) and unconditional-only ($p=0$) objective,
+our scheme can be viewed as a continuous generalization of classifier-free guidance training. We do
+not yet apply guidance at sampling time; combining the two is natural future work.
+
+\paragraph{Limitations.}
+Our models are small (8-block DDiT) and trained on small datasets, with heavy epoch repetition
+(e.g.\ $\sim$1.8k N-Queens-8 examples over $100$k steps at batch $256$), so overfitting/data-efficiency
+effects are entangled with the conditioning-noise effect. Our bootstrap CIs control
+evaluation-sampling variance, but all runs are single training seeds, so training-seed variance
+is unaddressed. Several configuration details remain to be confirmed
+(optimizer class, GPU, N-Queens-10 split sizes). We study easy Sudoku and small N-Queens; harder
+Sudoku and natural-language reasoning (GSM8k) are in progress and not reported here.
+
+\section{Conclusion}
+\label{sec:conclusion}
+We revisited a default of conditional continuous diffusion language models---pasting in clean
+conditioning tokens at every step---and showed that simply \emph{noising} the conditioning tokens
+during training, controlled by a single probability $p_\text{condclean}$, consistently improves
+conditional generation. Lower $p$ (more noising) raises Sudoku infill accuracy and, most clearly,
+N-Queens solution coverage, with an intermediate-but-low $p\approx0.2$ best across tasks. The method
+is a one-line change to the training corruption and can be seen as a continuous generalization of
+classifier-free guidance. Future work includes the random-conditioning-time variant, larger models
+and harder Sudoku, sampling-time guidance, multi-seed variance checks, and language reasoning (GSM8k).
+
+\bibliography{references}
+\bibliographystyle{colm2026_conference}
+
+\appendix
+\section{Full Hyperparameters}
+\label{app:hyperparams}
+Table~\ref{tab:hparams} lists the shared training configuration (N-Queens Run; Sudoku differs only
+in board length $81$, batch size $32$, and $160$k training steps).
+
+\begin{table}[h]
+\centering
+\caption{Shared hyperparameters. \textbf{[TODO]} items remain to be confirmed against the original
+configuration.}
+\label{tab:hparams}
+\begin{tabular}{lll}
+\toprule
+Group & Setting & Value \\
+\midrule
+Model & hidden size / blocks / heads & $512$ / $8$ / $8$ \\
+      & cond.\ dim / dropout & $128$ / $0.1$ \\
+      & board length & $81$ (Sudoku), $64$/$100$ (N-Queens $n{=}8$/$10$) \\
+Algorithm & parameterization / pred.\ type & mean / $x_1$ \\
+          & loss type & flow \\
+          & diffusion forcing & true \\
+          & $p_\text{condclean}$ & $\{0.2,0.5,1.0\}$ (swept) \\
+Noise & type / eps & log-linear / $0$ \\
+Training & max steps & $100{,}001$ (N-Queens), $160$k (Sudoku) \\
+         & global batch size & $256$ (N-Queens), $32$ (Sudoku) \\
+         & precision / EMA & bf16-mixed / $0.9999$ \\
+         & grad clip & $1.0$ \\
+         & $t$-curriculum & $0.0\to1.0$ over $100$k steps \\
+Optimizer & class & Adam/AdamW \textbf{[TODO]} \\
+          & lr / $(\beta_1,\beta_2)$ / wd & $3\!\times\!10^{-4}$ / $(0.9,0.999)$ / $0$ \\
+          & warmup & $2{,}500$ steps (constant after) \\
+Sampling & predictor / solver & ancestral / Euler \\
+         & steps / temperature / nucleus & $128$ / $1.0$ / $1.0$ \\
+Hardware & accelerator / GPU & cuda, 1 device / \textbf{[TODO]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}
