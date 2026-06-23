@@ -1,7 +1,7 @@
 name: flm-infill-gsm8k
 
 resources:
-  infra: lambda #aws
+  infra: aws #lambda #aws
   accelerators: A100-80GB:8           # ~$1/hr. NOT A100:1 — that's an 8×A100 box on AWS
   #disk_tier: best               # fast NVMe to back the MOUNT_CACHED cache
 
@@ -22,10 +22,11 @@ file_mounts:
 envs:
   #WANDB_MODE: offline           # smoke test: no wandb auth needed (else init can hang)
   # --- smoke values: one run, checkpoints at step 100 & 200 ---
-  MAX_STEPS: 250000 
+  MAX_STEPS: 150001
   VAL_CHECK_INTERVAL: 10000 
   CKPT_EVERY: 25000 
-  CONDITIONING_PROBS_CLEAN: "1.0"
+  CONDITIONING_PROBS_CLEAN: "0.2"
+  SEPARATE_COND_TIME: TRUE
   #CONDITIONING_PROBS_CLEAN: 0.2
   # --- real sweep: SUBSET_SIZES "10000 1000", CONDITIONING_PROBS_CLEAN "0.2 0.5 1.0",
   #     NUM_TRAIN 10000, MAX_STEPS 160001, CKPT_EVERY 50000, SAMPLING_STEPS 128, DIFFICULTY hard

@@ -149,10 +149,17 @@ class FLMBase(trainer_base.TrainerBase):
             if conditioning_mask supplied than keep those clean    
 
         Params:
+            t: (torch.Tensor) noise level. May be per-sequence ``(B,)`` or
+                per-token ``(B, L)`` (the latter lets the conditioning tokens use
+                a different time than the response; see _separate_time_loss).
             conditioning_mask: (torch.Tensor) (B,L)
         """
-        t = t.unsqueeze(-1).unsqueeze(-1)
         target_data = F.one_hot(x0, self.vocab_size).float()
+        # Broadcast t up to target_data's (B, L, V) by appending singleton dims.
+        # (B,) -> (B,1,1) reproduces the original per-sequence behaviour;
+        # (B,L) -> (B,L,1) gives a per-token time.
+        while t.ndim < target_data.ndim:
+            t = t.unsqueeze(-1)
         noise = torch.randn_like(target_data, dtype=torch.float32)
         x_t = (1 - t) * noise + t * target_data
         if conditioning_mask is not None: # keep conditioning tokens clean
@@ -310,6 +317,13 @@ class FLM(FLMBase):
         tau_t = self._sample_t_interval(B, current_accumulation_step,
                                     t_min=self.t_min, t_max=self.t_max)
         t = self._tau_to_t(tau_t)
+
+        # Ablation: condition tokens carry their own independent noise level t'.
+        if (self.diffusion_forcing and conditioning_tokens is not None
+                and getattr(self.config.algo, 'separate_conditioning_time', False)):
+            return self._separate_time_loss(x0, conditioning_tokens, tau_t, t,
+                                            current_accumulation_step)
+
         if self.diffusion_forcing and conditioning_tokens is not None:
             clean_mask = self._sample_clean_mask(conditioning_tokens)
         else:
@@ -326,6 +340,37 @@ class FLM(FLMBase):
             loss_weight = loss_weight.unsqueeze(-1)
             loss = torch.exp(-loss_weight) * loss + loss_weight
             #self.log('loss_weighted', loss.mean(), prog_bar=True)
+        return loss
+
+    def _separate_time_loss(self, x0, conditioning_tokens, tau_t, t,
+                            current_accumulation_step):
+        """FLM denoiser loss with an independent noise level for conditioning.
+
+        The response tokens are corrupted at time ``t`` (reparameterised
+        ``tau_t``); the conditioning tokens at an independently-sampled time
+        ``t'`` (``tau_t_prime``). Both times are fed to the backbone per-token
+        and *no* token is held clean -- the conditioning is genuinely noised at
+        t'. Returns the per-token CE loss ``(B, L)``; the caller masks it with
+        ``valid_tokens``.
+
+        Args:
+            conditioning_tokens: (B, L) bool mask, 1 on the conditioning tokens.
+            tau_t, t: (B,) the response time (reparam / data time).
+        """
+        assert self.config.algo.learnable_loss_weighting is not True, \
+            "learnable_loss_weighting is unsupported with separate_conditioning_time"
+        B = x0.shape[0]
+        cond = conditioning_tokens.bool()  # (B, L)
+        # Independent time for the conditioning tokens.
+        tau_t_prime = self._sample_t_interval(B, current_accumulation_step,
+                                              t_min=self.t_min, t_max=self.t_max)
+        t_prime = self._tau_to_t(tau_t_prime)
+        # Per-token times: conditioning -> t'/tau', response -> t/tau.
+        t_pt = torch.where(cond, t_prime.unsqueeze(-1), t.unsqueeze(-1))         # (B, L)
+        tau_pt = torch.where(cond, tau_t_prime.unsqueeze(-1), tau_t.unsqueeze(-1))  # (B, L)
+        x_t, target_data = self.corrupt_continuous(x0, t_pt)  # per-token, no clamp
+        f = self.forward(x_t, tau_pt, per_token_time=True)
+        loss = -(target_data * f).sum(dim=-1)
         return loss
 
     @torch.no_grad()

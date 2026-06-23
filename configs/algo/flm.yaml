@@ -14,5 +14,10 @@ double_temb: False
 learnable_loss_weighting: False
 infill: True
 diffusion_forcing: True # feed per token time 
-conditioning_time_random: True 
-conditioning_prob_clean: 1.0 
+conditioning_time_random: True
+conditioning_prob_clean: 1.0
+# Ablation: give the conditioning tokens their own, independently-sampled noise
+# level t' (response stays at t). When True, conditioning is genuinely noised at
+# t' per-token and is never held clean during training (so conditioning_prob_clean
+# is ignored). Eval/sampling still feed clean conditioning. See FLM._separate_time_loss.
+separate_conditioning_time: False

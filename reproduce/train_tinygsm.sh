@@ -31,6 +31,7 @@ CKPT_EVERY="${CKPT_EVERY:-10000}"
 LIMIT_VAL_BATCHES="${LIMIT_VAL_BATCHES:-500}"
 NUM_WORKERS="${NUM_WORKERS:-16}"
 SWEEP_ROOT="${SWEEP_ROOT:-outputs/flm-tinygsm}"
+SEPARATE_COND_TIME="${SEPARATE_COND_TIME:-false}"   # true | false
 
 conditioning_time_random="${CONDITIONING_TIME_RANDOM:-true}"
 read -r -a conditioning_prob_clean_values <<< "${CONDITIONING_PROBS_CLEAN:-0.2 0.5 1.0}"
@@ -55,6 +56,7 @@ for cprob in "${conditioning_prob_clean_values[@]}"; do
     algo.diffusion_forcing=true \
     algo.conditioning_time_random="${conditioning_time_random}" \
     algo.conditioning_prob_clean="${cprob}" \
+    algo.separate_conditioning_time="${SEPARATE_COND_TIME}" \
     loader.global_batch_size="${GLOBAL_BATCH}" \
     loader.batch_size="${BATCH_SIZE}" \
     loader.num_workers="${NUM_WORKERS}" \
