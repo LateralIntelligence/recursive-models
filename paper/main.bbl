@@ -1,48 +1,151 @@
-\begin{thebibliography}{8}
+\begin{thebibliography}{24}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
   \providecommand{\doi}[1]{doi: #1}\else
   \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
 
-\bibitem[{TODO}(2025{\natexlab{a}})]{TODO-CFG}
-{TODO}.
-\newblock [todo] classifier-free diffusion guidance, 2025{\natexlab{a}}.
-\newblock Placeholder; supply arXiv link.
+\bibitem[Albergo \& Vanden-Eijnden(2023)Albergo and Vanden-Eijnden]{albergo2023interpolants}
+Michael~S. Albergo and Eric Vanden-Eijnden.
+\newblock Building normalizing flows with stochastic interpolants.
+\newblock \emph{arXiv preprint arXiv:2209.15571}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2209.15571}.
 
-\bibitem[{TODO}(2025{\natexlab{b}})]{TODO-FLM}
-{TODO}.
-\newblock [todo] flow language model, 2025{\natexlab{b}}.
-\newblock Placeholder; supply arXiv link.
+\bibitem[Austin et~al.(2021)Austin, Johnson, Ho, Tarlow, and van~den Berg]{d3pm}
+Jacob Austin, Daniel~D. Johnson, Jonathan Ho, Daniel Tarlow, and Rianne van~den Berg.
+\newblock Structured denoising diffusion models in discrete state-spaces.
+\newblock \emph{arXiv preprint arXiv:2107.03006}, 2021.
+\newblock URL \url{https://arxiv.org/abs/2107.03006}.
 
-\bibitem[{TODO}(2025{\natexlab{c}})]{TODO-blockwise-sft}
-{TODO}.
-\newblock [todo] blockwise sft for diffusion language models, 2025{\natexlab{c}}.
-\newblock Placeholder; supply arXiv link.
+\bibitem[Baek et~al.(2026)Baek, Jo, Kim, Ren, Bengio, and Ahn]{gram}
+Junyeob Baek, Mingyu Jo, Minsu Kim, Mengye Ren, Yoshua Bengio, and Sungjin Ahn.
+\newblock Generative recursive reasoning.
+\newblock \emph{arXiv preprint arXiv:2605.19376}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2605.19376}.
 
-\bibitem[{TODO}(2025{\natexlab{d}})]{TODO-cascaded}
-{TODO}.
-\newblock [todo] cascaded diffusion models for high fidelity image generation, 2025{\natexlab{d}}.
-\newblock Placeholder; supply arXiv link.
+\bibitem[Chen et~al.(2024)Chen, Mart{\'i}~Monso, Du, Simchowitz, Tedrake, and Sitzmann]{diffusion_forcing}
+Boyuan Chen, Diego Mart{\'i}~Monso, Yilun Du, Max Simchowitz, Russ Tedrake, and Vincent Sitzmann.
+\newblock Diffusion forcing: Next-token prediction meets full-sequence diffusion.
+\newblock \emph{arXiv preprint arXiv:2407.01392}, 2024.
+\newblock URL \url{https://arxiv.org/abs/2407.01392}.
 
-\bibitem[{TODO}(2025{\natexlab{e}})]{TODO-diffusion-forcing}
-{TODO}.
-\newblock [todo] diffusion forcing, 2025{\natexlab{e}}.
-\newblock Placeholder; supply arXiv link.
+\bibitem[Deschenaux \& Gulcehre(2026)Deschenaux and Gulcehre]{hyperspherical_flows}
+Justin Deschenaux and Caglar Gulcehre.
+\newblock Language modeling with hyperspherical flows.
+\newblock \emph{arXiv preprint arXiv:2605.11125}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2605.11125}.
 
-\bibitem[{TODO}(2025{\natexlab{f}})]{TODO-gram}
-{TODO}.
-\newblock [todo] gram / n-queens coverage source, 2025{\natexlab{f}}.
-\newblock Placeholder; supply arXiv link.
+\bibitem[Dieleman et~al.(2022)Dieleman, Sartran, Roshannai, Savinov, Ganin, Richemond, Doucet, Strudel, Dyer, Durkan, Hawthorne, Leblond, Grathwohl, and Adler]{cdcd}
+Sander Dieleman, Laurent Sartran, Arman Roshannai, Nikolay Savinov, Yaroslav Ganin, Pierre~H. Richemond, Arnaud Doucet, Robin Strudel, Chris Dyer, Conor Durkan, Curtis Hawthorne, R{\'e}mi Leblond, Will Grathwohl, and Jonas Adler.
+\newblock Continuous diffusion for categorical data.
+\newblock \emph{arXiv preprint arXiv:2211.15089}, 2022.
+\newblock URL \url{https://arxiv.org/abs/2211.15089}.
 
-\bibitem[{TODO}(2025{\natexlab{g}})]{TODO-prompt-infill}
-{TODO}.
-\newblock [todo] unlocking prompt infilling capability for diffusion language models, 2025{\natexlab{g}}.
-\newblock Placeholder; supply arXiv link.
+\bibitem[Fujinuma \& Sakaguchi(2026)Fujinuma and Sakaguchi]{prompt_infill}
+Yoshinari Fujinuma and Keisuke Sakaguchi.
+\newblock Unlocking prompt infilling capability for diffusion language models.
+\newblock \emph{arXiv preprint arXiv:2604.03677}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2604.03677}.
 
-\bibitem[{TODO}(2025{\natexlab{h}})]{TODO-trm}
-{TODO}.
-\newblock [todo] sudoku-extreme / trm benchmark source, 2025{\natexlab{h}}.
-\newblock Placeholder; supply arXiv link.
+\bibitem[Gong et~al.(2023)Gong, Li, Feng, Wu, and Kong]{diffuseq}
+Shansan Gong, Mukai Li, Jiangtao Feng, Zhiyong Wu, and Lingpeng Kong.
+\newblock {DiffuSeq}: Sequence to sequence text generation with diffusion models.
+\newblock In \emph{International Conference on Learning Representations (ICLR)}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2210.08933}.
+
+\bibitem[Ho \& Salimans(2022)Ho and Salimans]{cfg}
+Jonathan Ho and Tim Salimans.
+\newblock Classifier-free diffusion guidance.
+\newblock \emph{arXiv preprint arXiv:2207.12598}, 2022.
+\newblock URL \url{https://arxiv.org/abs/2207.12598}.
+
+\bibitem[Ho et~al.(2020)Ho, Jain, and Abbeel]{ddpm}
+Jonathan Ho, Ajay Jain, and Pieter Abbeel.
+\newblock Denoising diffusion probabilistic models.
+\newblock \emph{arXiv preprint arXiv:2006.11239}, 2020.
+\newblock URL \url{https://arxiv.org/abs/2006.11239}.
+
+\bibitem[Ho et~al.(2022)Ho, Saharia, Chan, Fleet, Norouzi, and Salimans]{cascaded}
+Jonathan Ho, Chitwan Saharia, William Chan, David~J. Fleet, Mohammad Norouzi, and Tim Salimans.
+\newblock Cascaded diffusion models for high fidelity image generation.
+\newblock \emph{arXiv preprint arXiv:2106.15282}, 2022.
+\newblock URL \url{https://arxiv.org/abs/2106.15282}.
+
+\bibitem[Hu et~al.(2026)Hu, Qiu, Lu, Zhao, Li, Kim, Andreas, and He]{elf}
+Keya Hu, Linlu Qiu, Yiyang Lu, Hanhong Zhao, Tianhong Li, Yoon Kim, Jacob Andreas, and Kaiming He.
+\newblock {ELF}: Embedded language flows.
+\newblock \emph{arXiv preprint arXiv:2605.10938}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2605.10938}.
+
+\bibitem[Jolicoeur-Martineau(2025)]{trm}
+Alexia Jolicoeur-Martineau.
+\newblock Less is more: Recursive reasoning with tiny networks.
+\newblock \emph{arXiv preprint arXiv:2510.04871}, 2025.
+\newblock URL \url{https://arxiv.org/abs/2510.04871}.
+
+\bibitem[Lee et~al.(2026)Lee, Yoo, Agarwal, Shah, Huang, Raghunathan, Hong, Boffi, and Kim]{flm}
+Chanhyuk Lee, Jaehoon Yoo, Manan Agarwal, Sheel Shah, Jerry Huang, Aditi Raghunathan, Seunghoon Hong, Nicholas~M. Boffi, and Jinwoo Kim.
+\newblock Flow map language models: One-step language modeling via continuous denoising.
+\newblock \emph{arXiv preprint arXiv:2602.16813}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2602.16813}.
+
+\bibitem[Li et~al.(2022)Li, Thickstun, Gulrajani, Liang, and Hashimoto]{diffusion_lm}
+Xiang~Lisa Li, John Thickstun, Ishaan Gulrajani, Percy Liang, and Tatsunori~B. Hashimoto.
+\newblock {Diffusion-LM} improves controllable text generation.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2022.
+\newblock URL \url{https://arxiv.org/abs/2205.14217}.
+
+\bibitem[Lipman et~al.(2023)Lipman, Chen, Ben-Hamu, Nickel, and Le]{lipman2023flow}
+Yaron Lipman, Ricky T.~Q. Chen, Heli Ben-Hamu, Maximilian Nickel, and Matt Le.
+\newblock Flow matching for generative modeling.
+\newblock \emph{arXiv preprint arXiv:2210.02747}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2210.02747}.
+
+\bibitem[Lou et~al.(2024)Lou, Meng, and Ermon]{sedd}
+Aaron Lou, Chenlin Meng, and Stefano Ermon.
+\newblock Discrete diffusion modeling by estimating the ratios of the data distribution.
+\newblock \emph{arXiv preprint arXiv:2310.16834}, 2024.
+\newblock URL \url{https://arxiv.org/abs/2310.16834}.
+
+\bibitem[Nie et~al.(2025)Nie, Zhu, You, Zhang, Ou, Hu, Zhou, Lin, Wen, and Li]{llada}
+Shen Nie, Fengqi Zhu, Zebin You, Xiaolu Zhang, Jingyang Ou, Jun Hu, Jun Zhou, Yankai Lin, Ji-Rong Wen, and Chongxuan Li.
+\newblock Large language diffusion models.
+\newblock \emph{arXiv preprint arXiv:2502.09992}, 2025.
+\newblock URL \url{https://arxiv.org/abs/2502.09992}.
+
+\bibitem[Peebles \& Xie(2023)Peebles and Xie]{peebles2023dit}
+William Peebles and Saining Xie.
+\newblock Scalable diffusion models with transformers.
+\newblock In \emph{Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)}, pp.\  4195--4205, 2023.
+
+\bibitem[Potaptchik et~al.(2026)Potaptchik, Yim, Saravanan, Holderrieth, Vanden-Eijnden, and Albergo]{discrete_flow_maps}
+Peter Potaptchik, Jason Yim, Adhi Saravanan, Peter Holderrieth, Eric Vanden-Eijnden, and Michael~S. Albergo.
+\newblock Discrete flow maps.
+\newblock \emph{arXiv preprint arXiv:2604.09784}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2604.09784}.
+
+\bibitem[Sahoo et~al.(2024)Sahoo, Arriola, Schiff, Gokaslan, Marroquin, Chiu, Rush, and Kuleshov]{mdlm}
+Subham~Sekhar Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar Marroquin, Justin~T. Chiu, Alexander Rush, and Volodymyr Kuleshov.
+\newblock Simple and effective masked diffusion language models.
+\newblock \emph{arXiv preprint arXiv:2406.07524}, 2024.
+\newblock URL \url{https://arxiv.org/abs/2406.07524}.
+
+\bibitem[Song et~al.(2021)Song, Sohl-Dickstein, Kingma, Kumar, Ermon, and Poole]{song2021sde}
+Yang Song, Jascha Sohl-Dickstein, Diederik~P. Kingma, Abhishek Kumar, Stefano Ermon, and Ben Poole.
+\newblock Score-based generative modeling through stochastic differential equations.
+\newblock \emph{arXiv preprint arXiv:2011.13456}, 2021.
+\newblock URL \url{https://arxiv.org/abs/2011.13456}.
+
+\bibitem[Sun et~al.(2025)]{blockwise_sft}
+Bowen Sun et~al.
+\newblock Blockwise {SFT} for diffusion language models: Reconciling bidirectional attention and autoregressive decoding.
+\newblock \emph{arXiv preprint arXiv:2508.19529}, 2025.
+\newblock URL \url{https://arxiv.org/abs/2508.19529}.
+
+\bibitem[Wu et~al.(2023)Wu, Fan, Liu, Gong, Shen, Jiao, Zheng, Li, Wei, Guo, Duan, and Chen]{ar_diffusion}
+Tong Wu, Zhihao Fan, Xiao Liu, Yeyun Gong, Yelong Shen, Jian Jiao, Hai-Tao Zheng, Juntao Li, Zhongyu Wei, Jian Guo, Nan Duan, and Weizhu Chen.
+\newblock {AR-Diffusion}: Auto-regressive diffusion model for text generation.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2305.09515}.
 
 \end{thebibliography}

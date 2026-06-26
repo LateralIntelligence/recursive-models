@@ -1,5 +1,5 @@
 # train.yaml — proves: train → checkpoint → S3 → eval → results.json → S3
-name: flm-infill-sudoku
+name: flm-infill-nqueens
 
 resources:
   infra: lambda #aws
@@ -10,7 +10,7 @@ workdir: .                      # code only; outputs/ is .gitignore'd, won't syn
 
 file_mounts:
   /outputs:
-    name: lateral-intelligence-ckpts-changeme   # globally unique; SkyPilot creates it
+    name: lateral-intelligence-ckpts-nqueens-ten   # globally unique; SkyPilot creates it
     store: s3
     mode: MOUNT_CACHED
     type: MODEL_CHECKPOINT_RW                    # pre-tuned for bursty checkpoint writes
@@ -21,11 +21,14 @@ file_mounts:
   #   type: DATASET_RO
 
 envs:
-  WANDB_MODE: offline           # smoke test: no wandb auth needed (else init can hang)
+  #WANDB_MODE: offline           # smoke test: no wandb auth needed (else init can hang)
   # --- smoke values: one run, checkpoints at step 100 & 200 ---
-  DIFFICULTY: easy
-  SUBSET_SIZES: "100"
-  CONDITIONING_PROBS_CLEAN: "1.0"
+  #DIFFICULTY: easy
+  #SUBSET_SIZES: "100"
+  #CONDITIONING_PROBS_CLEAN: "1.0"
+  DATA: "nqueens-10"
+  N: "10"
+  MODEL_LENGTH: "100"
   NUM_TRAIN: "100"
   NUM_VALID: "50"
   MAX_STEPS: "200"
@@ -34,6 +37,9 @@ envs:
   SAMPLING_STEPS: "16"
   # --- real sweep: SUBSET_SIZES "10000 1000", CONDITIONING_PROBS_CLEAN "0.2 0.5 1.0",
   #     NUM_TRAIN 10000, MAX_STEPS 160001, CKPT_EVERY 50000, SAMPLING_STEPS 128, DIFFICULTY hard
+
+secrets:
+  WANDB_API_KEY: null
 
 setup: |
   set -e
@@ -60,4 +66,4 @@ setup: |
 run: |
   source ~/flm-env/bin/activate
   nvidia-smi
-  bash reproduce/sweep_infill_sudoku_gen.sh
+  bash reproduce/sweep_infill_nqueens.sh

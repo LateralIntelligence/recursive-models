@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# eval_infill_cell.sh — evaluate the FINAL (last.ckpt) checkpoint of ONE infill
-# ablation cell. Root-agnostic: point ABLATIONS_ROOT at the local ./ablations
+# eval_infill_cell.sh — evaluate the FINAL (highest-numbered) checkpoint of ONE
+# infill ablation cell. Root-agnostic: point ABLATIONS_ROOT at the local ./ablations
 # folder or at a mounted bucket (e.g. /artifacts) and pass RUN_SUBDIR (the path
 # of the run relative to that root). One SkyPilot job runs one cell -> the
 # sweep parallelizes by fanning out cells.
@@ -14,7 +14,7 @@
 # nqueens env: DATA, NQUEENS_N, MODEL_LENGTH    (+ optional NUM_SAMPLES/NUM_PUZZLES)
 #
 # Results land next to the checkpoint at
-#   <ABLATIONS_ROOT>/<RUN_SUBDIR>/{sudoku_eval,nqueens_eval}/last/results.json
+#   <ABLATIONS_ROOT>/<RUN_SUBDIR>/{sudoku_eval,nqueens_eval}/<ckpt_stem>/results.json
 #
 set -uo pipefail
 
@@ -29,8 +29,14 @@ ABLATIONS_ROOT="${ABLATIONS_ROOT:-ablations}"
 SAMPLING_STEPS="${SAMPLING_STEPS:-128}"
 
 RUN_DIR="${ABLATIONS_ROOT}/${RUN_SUBDIR}"
-CKPT="${RUN_DIR}/checkpoints/last.ckpt"
-[[ -f "${CKPT}" ]] || { echo "ERROR: no last.ckpt at ${CKPT}"; exit 1; }
+# Use the FINAL (highest-numbered) periodic checkpoint, NOT last.ckpt. last.ckpt
+# is written by the val-monitor callback (save_last) and on these runs froze at
+# the best-NLL step instead of the final step (repeated in-place overwrites also
+# didn't always persist to the cached bucket). The numbered "<epoch>-<step>.ckpt"
+# files are saved by checkpoint_every_n_steps with unique names and are reliable.
+CKPT="$(ls "${RUN_DIR}"/checkpoints/*-*.ckpt 2>/dev/null | sort -V | tail -1)"
+[[ -n "${CKPT}" && -f "${CKPT}" ]] || { echo "ERROR: no numbered checkpoint in ${RUN_DIR}/checkpoints"; exit 1; }
+CKPT_STEM="$(basename "${CKPT}" .ckpt)"
 ABS_CKPT="$(realpath "${CKPT}")"
 
 echo "=== eval cell: TASK=${TASK}  RUN_DIR=${RUN_DIR} ==="
@@ -54,7 +60,7 @@ if [[ "${TASK}" == "sudoku" ]]; then
     sampling.steps="${SAMPLING_STEPS}" \
     sampling.override_algo_steps=true \
     eval.checkpoint_path="${ABS_CKPT}"
-  RESULT="${RUN_DIR}/sudoku_eval/last/results.json"
+  RESULT="${RUN_DIR}/sudoku_eval/${CKPT_STEM}/results.json"
 
 elif [[ "${TASK}" == "nqueens" ]]; then
   : "${DATA:?set DATA}"
@@ -75,7 +81,7 @@ elif [[ "${TASK}" == "nqueens" ]]; then
     eval.nqueens_num_samples="${NUM_SAMPLES:-20}" \
     eval.nqueens_num_puzzles="${NUM_PUZZLES:-750}" \
     eval.checkpoint_path="${ABS_CKPT}"
-  RESULT="${RUN_DIR}/nqueens_eval/last/results.json"
+  RESULT="${RUN_DIR}/nqueens_eval/${CKPT_STEM}/results.json"
 
 else
   echo "ERROR: unknown TASK=${TASK} (want sudoku|nqueens)"; exit 1

@@ -9,13 +9,217 @@
  year = {2017}
 }
 
-% TODO: replace these placeholder entries with real metadata.
-% Supply arXiv links and I will fetch the correct title/authors/year.
-@misc{TODO-FLM,            title = {[TODO] Flow Language Model},                                   author = {{TODO}}, year = {2025}, note = {Placeholder; supply arXiv link}}
-@misc{TODO-CFG,            title = {[TODO] Classifier-Free Diffusion Guidance},                    author = {{TODO}}, year = {2025}, note = {Placeholder; supply arXiv link}}
-@misc{TODO-diffusion-forcing, title = {[TODO] Diffusion Forcing},                                 author = {{TODO}}, year = {2025}, note = {Placeholder; supply arXiv link}}
-@misc{TODO-cascaded,       title = {[TODO] Cascaded Diffusion Models for High Fidelity Image Generation}, author = {{TODO}}, year = {2025}, note = {Placeholder; supply arXiv link}}
-@misc{TODO-blockwise-sft,  title = {[TODO] Blockwise SFT for Diffusion Language Models},           author = {{TODO}}, year = {2025}, note = {Placeholder; supply arXiv link}}
-@misc{TODO-prompt-infill,  title = {[TODO] Unlocking Prompt Infilling Capability for Diffusion Language Models}, author = {{TODO}}, year = {2025}, note = {Placeholder; supply arXiv link}}
-@misc{TODO-trm,            title = {[TODO] Sudoku-extreme / TRM benchmark source},                 author = {{TODO}}, year = {2025}, note = {Placeholder; supply arXiv link}}
-@misc{TODO-gram,           title = {[TODO] GRAM / N-Queens coverage source},                       author = {{TODO}}, year = {2025}, note = {Placeholder; supply arXiv link}}
+@inproceedings{peebles2023dit,
+  title     = {Scalable Diffusion Models with Transformers},
+  author    = {Peebles, William and Xie, Saining},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+  year      = {2023},
+  pages      = {4195--4205}
+}
+
+% ---------------------------------------------------------------------
+% Diffusion / flow / interpolant foundations
+% ---------------------------------------------------------------------
+@article{ddpm,
+ title = {Denoising Diffusion Probabilistic Models},
+ author = {Ho, Jonathan and Jain, Ajay and Abbeel, Pieter},
+ journal = {arXiv preprint arXiv:2006.11239},
+ year = {2020},
+ url = {https://arxiv.org/abs/2006.11239}
+}
+
+@article{song2021sde,
+ title = {Score-Based Generative Modeling through Stochastic Differential Equations},
+ author = {Song, Yang and Sohl-Dickstein, Jascha and Kingma, Diederik P. and Kumar, Abhishek and Ermon, Stefano and Poole, Ben},
+ journal = {arXiv preprint arXiv:2011.13456},
+ year = {2021},
+ url = {https://arxiv.org/abs/2011.13456}
+}
+
+@article{lipman2023flow,
+ title = {Flow Matching for Generative Modeling},
+ author = {Lipman, Yaron and Chen, Ricky T. Q. and Ben-Hamu, Heli and Nickel, Maximilian and Le, Matt},
+ journal = {arXiv preprint arXiv:2210.02747},
+ year = {2023},
+ url = {https://arxiv.org/abs/2210.02747}
+}
+
+@article{albergo2023interpolants,
+ title = {Building Normalizing Flows with Stochastic Interpolants},
+ author = {Albergo, Michael S. and Vanden-Eijnden, Eric},
+ journal = {arXiv preprint arXiv:2209.15571},
+ year = {2023},
+ url = {https://arxiv.org/abs/2209.15571}
+}
+
+% ---------------------------------------------------------------------
+% Discrete diffusion language models
+% ---------------------------------------------------------------------
+@article{d3pm,
+ title = {Structured Denoising Diffusion Models in Discrete State-Spaces},
+ author = {Austin, Jacob and Johnson, Daniel D. and Ho, Jonathan and Tarlow, Daniel and van den Berg, Rianne},
+ journal = {arXiv preprint arXiv:2107.03006},
+ year = {2021},
+ url = {https://arxiv.org/abs/2107.03006}
+}
+
+@article{sedd,
+ title = {Discrete Diffusion Modeling by Estimating the Ratios of the Data Distribution},
+ author = {Lou, Aaron and Meng, Chenlin and Ermon, Stefano},
+ journal = {arXiv preprint arXiv:2310.16834},
+ year = {2024},
+ url = {https://arxiv.org/abs/2310.16834}
+}
+
+@article{mdlm,
+ title = {Simple and Effective Masked Diffusion Language Models},
+ author = {Sahoo, Subham Sekhar and Arriola, Marianne and Schiff, Yair and Gokaslan, Aaron and Marroquin, Edgar and Chiu, Justin T. and Rush, Alexander and Kuleshov, Volodymyr},
+ journal = {arXiv preprint arXiv:2406.07524},
+ year = {2024},
+ url = {https://arxiv.org/abs/2406.07524}
+}
+
+@article{llada,
+ title = {Large Language Diffusion Models},
+ author = {Nie, Shen and Zhu, Fengqi and You, Zebin and Zhang, Xiaolu and Ou, Jingyang and Hu, Jun and Zhou, Jun and Lin, Yankai and Wen, Ji-Rong and Li, Chongxuan},
+ journal = {arXiv preprint arXiv:2502.09992},
+ year = {2025},
+ url = {https://arxiv.org/abs/2502.09992}
+}
+
+@inproceedings{diffusion_lm,
+  title={{Diffusion-LM} Improves Controllable Text Generation},
+  author={Li, Xiang Lisa and Thickstun, John and Gulrajani, Ishaan and Liang, Percy and Hashimoto, Tatsunori B.},
+  booktitle={Advances in Neural Information Processing Systems (NeurIPS)},
+  year={2022},
+  url={https://arxiv.org/abs/2205.14217},
+}
+
+@inproceedings{diffuseq,
+  title={{DiffuSeq}: Sequence to Sequence Text Generation with Diffusion Models},
+  author={Gong, Shansan and Li, Mukai and Feng, Jiangtao and Wu, Zhiyong and Kong, Lingpeng},
+  booktitle={International Conference on Learning Representations (ICLR)},
+  year={2023},
+  url={https://arxiv.org/abs/2210.08933},
+}
+
+@article{cdcd,
+  title={Continuous Diffusion for Categorical Data},
+  author={Dieleman, Sander and Sartran, Laurent and Roshannai, Arman and Savinov, Nikolay and Ganin, Yaroslav and Richemond, Pierre H. and Doucet, Arnaud and Strudel, Robin and Dyer, Chris and Durkan, Conor and Hawthorne, Curtis and Leblond, R{\'e}mi and Grathwohl, Will and Adler, Jonas},
+  journal={arXiv preprint arXiv:2211.15089},
+  year={2022},
+  url={https://arxiv.org/abs/2211.15089},
+}
+
+@article{dinoiser,
+  title={{DINOISER}: Diffused Conditional Sequence Learning by Manipulating Noises},
+  author={Ye, Jiasheng and Zheng, Zaixiang and Bao, Yu and Qian, Lihua and Wang, Mingxuan},
+  journal={Transactions of the Association for Computational Linguistics (TACL)},
+  year={2024},
+  url={https://arxiv.org/abs/2302.10025},
+}
+
+@inproceedings{ar_diffusion,
+  title={{AR-Diffusion}: Auto-Regressive Diffusion Model for Text Generation},
+  author={Wu, Tong and Fan, Zhihao and Liu, Xiao and Gong, Yeyun and Shen, Yelong and Jiao, Jian and Zheng, Hai-Tao and Li, Juntao and Wei, Zhongyu and Guo, Jian and Duan, Nan and Chen, Weizhu},
+  booktitle={Advances in Neural Information Processing Systems (NeurIPS)},
+  year={2023},
+  url={https://arxiv.org/abs/2305.09515},
+}
+
+% ---------------------------------------------------------------------
+% Continuous diffusion / flow language models (the FLM family)
+% ---------------------------------------------------------------------
+@article{flm,
+ title = {Flow Map Language Models: One-step Language Modeling via Continuous Denoising},
+ author = {Lee, Chanhyuk and Yoo, Jaehoon and Agarwal, Manan and Shah, Sheel and Huang, Jerry and Raghunathan, Aditi and Hong, Seunghoon and Boffi, Nicholas M. and Kim, Jinwoo},
+ journal = {arXiv preprint arXiv:2602.16813},
+ year = {2026},
+ url = {https://arxiv.org/abs/2602.16813}
+}
+
+@article{discrete_flow_maps,
+ title = {Discrete Flow Maps},
+ author = {Potaptchik, Peter and Yim, Jason and Saravanan, Adhi and Holderrieth, Peter and Vanden-Eijnden, Eric and Albergo, Michael S.},
+ journal = {arXiv preprint arXiv:2604.09784},
+ year = {2026},
+ url = {https://arxiv.org/abs/2604.09784}
+}
+
+@article{hyperspherical_flows,
+ title = {Language Modeling with Hyperspherical Flows},
+ author = {Deschenaux, Justin and Gulcehre, Caglar},
+ journal = {arXiv preprint arXiv:2605.11125},
+ year = {2026},
+ url = {https://arxiv.org/abs/2605.11125}
+}
+
+@article{elf,
+ title = {{ELF}: Embedded Language Flows},
+ author = {Hu, Keya and Qiu, Linlu and Lu, Yiyang and Zhao, Hanhong and Li, Tianhong and Kim, Yoon and Andreas, Jacob and He, Kaiming},
+ journal = {arXiv preprint arXiv:2605.10938},
+ year = {2026},
+ url = {https://arxiv.org/abs/2605.10938}
+}
+
+% ---------------------------------------------------------------------
+% Guidance and conditioning / corrupting conditioning information
+% ---------------------------------------------------------------------
+@article{cfg,
+ title = {Classifier-Free Diffusion Guidance},
+ author = {Ho, Jonathan and Salimans, Tim},
+ journal = {arXiv preprint arXiv:2207.12598},
+ year = {2022},
+ url = {https://arxiv.org/abs/2207.12598}
+}
+
+@article{cascaded,
+ title = {Cascaded Diffusion Models for High Fidelity Image Generation},
+ author = {Ho, Jonathan and Saharia, Chitwan and Chan, William and Fleet, David J. and Norouzi, Mohammad and Salimans, Tim},
+ journal = {arXiv preprint arXiv:2106.15282},
+ year = {2022},
+ url = {https://arxiv.org/abs/2106.15282}
+}
+
+@article{diffusion_forcing,
+ title = {Diffusion Forcing: Next-token Prediction Meets Full-Sequence Diffusion},
+ author = {Chen, Boyuan and Mart{\'i} Monso, Diego and Du, Yilun and Simchowitz, Max and Tedrake, Russ and Sitzmann, Vincent},
+ journal = {arXiv preprint arXiv:2407.01392},
+ year = {2024},
+ url = {https://arxiv.org/abs/2407.01392}
+}
+
+@article{blockwise_sft,
+ title = {Blockwise {SFT} for Diffusion Language Models: Reconciling Bidirectional Attention and Autoregressive Decoding},
+ author = {Sun, Bowen and others},
+ journal = {arXiv preprint arXiv:2508.19529},
+ year = {2025},
+ url = {https://arxiv.org/abs/2508.19529}
+}
+
+@article{prompt_infill,
+ title = {Unlocking Prompt Infilling Capability for Diffusion Language Models},
+ author = {Fujinuma, Yoshinari and Sakaguchi, Keisuke},
+ journal = {arXiv preprint arXiv:2604.03677},
+ year = {2026},
+ url = {https://arxiv.org/abs/2604.03677}
+}
+
+% ---------------------------------------------------------------------
+% Combinatorial reasoning benchmarks
+% ---------------------------------------------------------------------
+@article{trm,
+ title = {Less is More: Recursive Reasoning with Tiny Networks},
+ author = {Jolicoeur-Martineau, Alexia},
+ journal = {arXiv preprint arXiv:2510.04871},
+ year = {2025},
+ url = {https://arxiv.org/abs/2510.04871}
+}
+
+@article{gram,
+ title = {Generative Recursive Reasoning},
+ author = {Baek, Junyeob and Jo, Mingyu and Kim, Minsu and Ren, Mengye and Bengio, Yoshua and Ahn, Sungjin},
+ journal = {arXiv preprint arXiv:2605.19376},
+ year = {2026},
+ url = {https://arxiv.org/abs/2605.19376}
+}

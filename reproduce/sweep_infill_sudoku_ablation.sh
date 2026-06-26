@@ -55,6 +55,7 @@ CKPT_EVERY="${CKPT_EVERY:-10000}"
 SAMPLING_STEPS="${SAMPLING_STEPS:-128}"
 
 # --- Ablation knobs ---------------------------------------------------------
+MODEL="${MODEL:-small_infill}"                      # infill model config (e.g. single_infill)
 INFILL_LOSS_REGION="${INFILL_LOSS_REGION:-board}"   # board | fill
 SEPARATE_COND_TIME="${SEPARATE_COND_TIME:-false}"   # true | false
 
@@ -66,7 +67,7 @@ EVAL_ONLY="${EVAL_ONLY:-0}"
 
 echo "=== ablation sweep config ==="
 echo "  DIFFICULTY=${DIFFICULTY}  GLOBAL_BATCH=${GLOBAL_BATCH}  MAX_STEPS=${MAX_STEPS}"
-echo "  INFILL_LOSS_REGION=${INFILL_LOSS_REGION}  SEPARATE_COND_TIME=${SEPARATE_COND_TIME}"
+echo "  MODEL=${MODEL}  INFILL_LOSS_REGION=${INFILL_LOSS_REGION}  SEPARATE_COND_TIME=${SEPARATE_COND_TIME}"
 echo "  CONDITIONING_PROBS_CLEAN=${conditioning_prob_clean_values[*]}  SUBSET_SIZES=${subset_sizes[*]}"
 echo "  SWEEP_ROOT=${SWEEP_ROOT}"
 echo "============================="
@@ -87,7 +88,7 @@ for cprob in "${conditioning_prob_clean_values[@]}"; do
         data.num_valid="${NUM_VALID}" \
         data.train_subset_n="${N}" \
         data.infill_loss_region="${INFILL_LOSS_REGION}" \
-        model=small_infill \
+        model="${MODEL}" \
         algo=flm \
         algo.infill=true \
         algo.conditioning_time_random="${conditioning_time_random}" \
@@ -132,7 +133,7 @@ for cprob in "${conditioning_prob_clean_values[@]}"; do
         data.num_train="${NUM_TRAIN}" \
         data.num_valid="${NUM_VALID}" \
         data.infill_loss_region="${INFILL_LOSS_REGION}" \
-        model=small_infill \
+        model="${MODEL}" \
         algo=flm \
         algo.infill=true \
         algo.diffusion_forcing=true \

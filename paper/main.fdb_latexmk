@@ -1,16 +1,17 @@
 # Fdb version 4
-["bibtex main"] 1782192574.51821 "main.aux" "main.bbl" "main" 1782193023.45905 0
+["bibtex main"] 1782452284.9562 "main.aux" "main.bbl" "main" 1782452350.85525 0
   "./colm2026_conference.bst" 1782095480.40257 26973 af983813ca1a1414954dbceae7baa2a1 ""
-  "./references.bib" 1782157638.47881 2040 c55ba8b3efa8c07f96aa3f9b4dc6eb6b ""
-  "main.aux" 1782193023.36625 7336 f4091724fde2e40d475634b1a59138b2 "pdflatex"
+  "./references.bib" 1782452284.73951 9262 190e6b8c47f8b0321d7c2f4352b4535e ""
+  "main.aux" 1782452350.75968 14861 4b0e4fde215954bff12e02fecd6efe35 "pdflatex"
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1782193022.98944 "/home/jsjung00/Desktop/Code/recursive-models/paper/main.tex" "main.pdf" "main" 1782193023.45919 0
+["pdflatex"] 1782452350.09118 "/home/jsjung00/Desktop/Code/recursive-models/paper/main.tex" "main.pdf" "main" 1782452350.85537 0
   "/etc/texmf/web2c/texmf.cnf" 1762931824.17117 475 c0e671620eb5563b2130f56340a5fde8 ""
-  "/home/jsjung00/Desktop/Code/recursive-models/paper/main.tex" 1782193022.78913 30299 386c10f420c8e0e3e3795f04f6a48b50 ""
+  "/home/jsjung00/Desktop/Code/recursive-models/paper/main.tex" 1782452349.88374 38611 129224b429a525bfa426fe7b9eeea6a8 ""
   "/usr/share/texlive/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
+  "/usr/share/texlive/texmf-dist/fonts/enc/dvips/inconsolata/i4-ot1-0.enc" 1561323594 2496 4d35740f3a177992ff7b134746c0a1db ""
   "/usr/share/texlive/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/adobe/palatino/pplb7t.tfm" 1136768653 1616 371d1ee60c04b008c8fd760060cd34f1 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/adobe/palatino/pplb8r.tfm" 1136768653 2532 9ad73cf4dd2173a847f2a5f5608e0b9a ""
@@ -25,6 +26,7 @@
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmr10.tfm" 1136768653 1296 45809c5a464d5f32c8f98ba97c1bb47f ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmss8.tfm" 1136768653 1296 d77f431d10d47c8ea2cc18cf45346274 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/cm/cmsy10.tfm" 1136768653 1124 6c73e740cf17375f03eec0ee63599741 ""
+  "/usr/share/texlive/texmf-dist/fonts/tfm/public/inconsolata/ot1-zi4r-0.tfm" 1561323594 912 a20aa2a2ed86fa42e5ec387898cd02d6 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/mathpazo/fplmbb.tfm" 1136768653 564 cb1a5fc3f0326dd000c6e6c0fce59d7c ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/mathpazo/fplmr.tfm" 1136768653 1032 7fa31d93ecd4cbdfac02c7a1ebc6facc ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/public/mathpazo/fplmri.tfm" 1136768653 1148 56b0fdf7ca3f800294e968f64cfdcb87 ""
@@ -41,6 +43,7 @@
   "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmss8.pfb" 1248133631 24420 52dbb8e8aa0069a1b987309557f8d303 ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb" 1248133631 32569 5e5ddc8df908dea60932f3c484a54c0d ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb" 1248133631 34694 ad62b13721ee8eda1dcc8993c8bd7041 ""
+  "/usr/share/texlive/texmf-dist/fonts/type1/public/inconsolata/Inconsolata-zi4r.pfb" 1558214095 55526 184de5d68af8c544d6d1653244a2b006 ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/mathpazo/fplmbb.pfb" 1136849748 12410 7504dd653d0e7cf266cb973aeafd597c ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/mathpazo/fplmr.pfb" 1136849748 9356 a3851bc942e9b6995883193472ba1847 ""
   "/usr/share/texlive/texmf-dist/fonts/type1/public/mathpazo/fplmri.pfb" 1136849748 15213 d999bbe8bd9c8f231f3f66a737c76478 ""
@@ -158,6 +161,7 @@
   "/usr/share/texlive/texmf-dist/tex/latex/hyperref/pd1enc.def" 1705871765 14249 e67cb186717b7ab18d14a4875e7e98b5 ""
   "/usr/share/texlive/texmf-dist/tex/latex/hyperref/puenc.def" 1705871765 117112 05831178ece2cad4d9629dcf65099b11 ""
   "/usr/share/texlive/texmf-dist/tex/latex/inconsolata/inconsolata.sty" 1558214095 4327 344b968526dbd149d23066f8b2160aa4 ""
+  "/usr/share/texlive/texmf-dist/tex/latex/inconsolata/ot1zi4.fd" 1516054831 1033 63d23fc5e9712c8312d76d4376f88831 ""
   "/usr/share/texlive/texmf-dist/tex/latex/kvoptions/kvoptions.sty" 1655478651 22555 6d8e155cfef6d82c3d5c742fea7c992e ""
   "/usr/share/texlive/texmf-dist/tex/latex/kvsetkeys/kvsetkeys.sty" 1665067230 13815 760b0c02f691ea230f5359c4e1de23a7 ""
   "/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def" 1704491087 30006 57b07afb710ee2f649c65cfbafda39c1 ""
@@ -169,6 +173,7 @@
   "/usr/share/texlive/texmf-dist/tex/latex/microtype/mt-msa.cfg" 1678741534 5929 0e1d31c98c10fece90f470d5746ecdd6 ""
   "/usr/share/texlive/texmf-dist/tex/latex/microtype/mt-msb.cfg" 1678741534 5594 45ca1ba048c2fa6267d5419cc463d804 ""
   "/usr/share/texlive/texmf-dist/tex/latex/microtype/mt-ppl.cfg" 1678741534 6374 83be6cc67c673c322412aeec3d0830e5 ""
+  "/usr/share/texlive/texmf-dist/tex/latex/multirow/multirow.sty" 1615845910 6149 2398eec4faa1ee24ff761581e580ecf1 ""
   "/usr/share/texlive/texmf-dist/tex/latex/pgf/basiclayer/pgf.sty" 1601326656 1090 bae35ef70b3168089ef166db3e66f5b2 ""
   "/usr/share/texlive/texmf-dist/tex/latex/pgf/basiclayer/pgfcore.sty" 1673816307 373 00b204b1d7d095b892ad31a7494b0373 ""
   "/usr/share/texlive/texmf-dist/tex/latex/pgf/compatibility/pgfcomp-version-0-65.sty" 1601326656 21013 f4ff83d25bb56552493b030f27c075ae ""
@@ -202,10 +207,12 @@
   "/var/lib/texmf/web2c/pdftex/pdflatex.fmt" 1762931834 6800799 6e705a24e73f5c0e3c80a29cd436bc96 ""
   "colm2026_conference.sty" 1782095480.40249 7727 238cc72ad95c78fc3c004773db9ec9c5 ""
   "fancyhdr.sty" 1782095480.40287 20521 e5d13d98d57bd53d4fed3aa61bd29c86 ""
-  "main.aux" 1782193023.36625 7336 f4091724fde2e40d475634b1a59138b2 "pdflatex"
-  "main.bbl" 1782192574.54736 1719 9d460fac0fee6906386c1e5b895bc9be "bibtex main"
-  "main.out" 1782193023.36625 1743 eed9ac0d376048351c2e46d24dc5ecf3 "pdflatex"
-  "main.tex" 1782193022.78913 30299 386c10f420c8e0e3e3795f04f6a48b50 ""
+  "figures/nqueens_combined.png" 1782425238.11256 280947 183ff492a354104df7f8b3db28fb0e12 ""
+  "figures/sudoku_solve_over_time_hard_easy.png" 1782451277.71156 226259 f7953672cd78e8ea8c829388cd59f13d ""
+  "main.aux" 1782452350.75968 14861 4b0e4fde215954bff12e02fecd6efe35 "pdflatex"
+  "main.bbl" 1782452284.98651 8605 9222f5e8f14f2e84269456916e92bb79 "bibtex main"
+  "main.out" 1782452350.76068 1832 eb2c1e53296786e77ce8057cb1409474 "pdflatex"
+  "main.tex" 1782452349.88374 38611 129224b429a525bfa426fe7b9eeea6a8 ""
   "math_commands.tex" 1782095480.40321 12284 a71653715108dc62b66e3a0bde0307d8 ""
   "natbib.sty" 1782095480.40308 45154 40088ce024445d7ee2bca59e704cdd01 ""
   (generated)
